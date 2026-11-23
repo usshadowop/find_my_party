@@ -1,0 +1,12 @@
+## Interface: 120000, 120001, 120005, 120007, 120100, 110207, 50500, 50501, 50502, 50503, 20505, 11507, 11508
+## Title: Find My Party
+## Notes: Big, colored names over your party members' heads, and arrows that point to the party members you pick.
+## Version: 1.0.0
+## SavedVariables: FindMyPartyDB
+## IconTexture: Interface\Icons\INV_Misc_Map_01
+## AddonCompartmentFunc: FindMyParty_OnAddonCompartmentClick
+
+Core.lua
+Nameplates.lua
+Arrows.lua
+Options.lua

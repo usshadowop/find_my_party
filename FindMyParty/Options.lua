@@ -176,8 +176,8 @@ local function GetRow(i)
     local row = memberRows[i]
     if row then return row end
     row = CheckBox(ui.listChild, "", function(checked)
-        if row.full then
-            ns.db.arrows.targets[row.full] = checked or nil
+        if row.key then
+            ns.db.arrows.targets[row.key] = checked or nil
             ns.RefreshAll()
         end
     end)
@@ -192,25 +192,24 @@ local function RefreshMembers()
 
     for _, m in ipairs(ns.GetGroupMembers()) do
         local classColor = m.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[m.class]
-        entries[#entries + 1] = { full = m.full, text = m.name, color = classColor }
-        inGroup[m.full] = true
+        entries[#entries + 1] = { key = m.name, text = m.name, color = classColor }
+        inGroup[m.name] = true
     end
 
     -- People picked earlier who aren't in the group right now. Their arrow
     -- comes back automatically when they rejoin; untick to forget them.
     local away = {}
-    for full in pairs(targets) do
-        if not inGroup[full] then away[#away + 1] = full end
+    for name in pairs(targets) do
+        if not inGroup[name] then away[#away + 1] = name end
     end
     table.sort(away)
-    for _, full in ipairs(away) do
-        local short = full:match("^(.-)%-") or full
-        entries[#entries + 1] = { full = full, text = short .. " |cff909090(not in group)|r" }
+    for _, name in ipairs(away) do
+        entries[#entries + 1] = { key = name, text = name .. " |cff909090(not in group)|r" }
     end
 
     for i, entry in ipairs(entries) do
         local row = GetRow(i)
-        row.full = entry.full
+        row.key = entry.key
         row:SetLabel(entry.text)
         local cc = entry.color
         if cc then
@@ -218,11 +217,11 @@ local function RefreshMembers()
         else
             row.label:SetTextColor(1, 1, 1)
         end
-        row:SetChecked(targets[entry.full] and true or false)
+        row:SetChecked(targets[entry.key] and true or false)
         row:Show()
     end
     for i = #entries + 1, #memberRows do
-        memberRows[i].full = nil
+        memberRows[i].key = nil
         memberRows[i]:Hide()
     end
 
@@ -245,7 +244,8 @@ local function CreateWindow()
     frame = CreateFrame("Frame", "FindMyPartyOptions", UIParent, BACKDROP_TEMPLATE)
     frame:SetSize(660, 470)
     frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
+    -- HIGH, like Blizzard's Settings window, so the color picker (DIALOG) opens on top.
+    frame:SetFrameStrata("HIGH")
     frame:SetToplevel(true)
     frame:EnableMouse(true)
     frame:SetMovable(true)
@@ -328,8 +328,8 @@ local function CreateWindow()
     end), LEFT, -288)
 
     local hint = Place(Text(frame, "GameFontDisableSmall",
-        "Shift+V also turns friendly name plates on and off. The game doesn't allow "
-        .. "changing them inside dungeons and raids."), LEFT + 4, -318)
+        "They can also be turned on in the game's Options, under Nameplates. The game "
+        .. "doesn't let addons change name plates inside dungeons and raids."), LEFT + 4, -318)
     hint:SetWidth(COLUMN_WIDTH - 8)
 
     -- Preview of what the name will look like
@@ -429,7 +429,7 @@ function Options:Refresh()
         ui.friendly.label:SetTextColor(0.5, 0.5, 0.5)
     end
 
-    ui.previewText:SetFont(ns.FONT, names.size, "THICKOUTLINE")
+    ns.SetBigFont(ui.previewText, names.size)
     ui.previewText:SetTextColor(c.r, c.g, c.b)
     ui.previewText:SetText("Party Member")
     local markerSize = math.floor(names.size * 1.2 + 0.5)
@@ -449,6 +449,7 @@ end
 function Options:Show()
     if not frame then CreateWindow() end
     frame:Show()
+    frame:Raise()
 end
 
 function Options:Toggle()
@@ -467,12 +468,9 @@ local function RegisterSettingsPage()
         .. "Everything is set up in its own window. You can also type /fmp.")
     about:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
 
+    -- Opens our window on top. Blizzard's windows are left alone: closing them
+    -- from addon code can taint them on Forever.
     local open = Button(panel, "Open Find My Party", 200, function()
-        if not InCombatLockdown() then
-            if SettingsPanel and SettingsPanel:IsShown() then HideUIPanel(SettingsPanel) end
-            if InterfaceOptionsFrame and InterfaceOptionsFrame:IsShown() then HideUIPanel(InterfaceOptionsFrame) end
-            if GameMenuFrame and GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
-        end
         Options:Show()
     end)
     open:SetPoint("TOPLEFT", about, "BOTTOMLEFT", 0, -12)

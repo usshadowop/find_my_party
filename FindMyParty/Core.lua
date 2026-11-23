@@ -1,9 +1,8 @@
--- Find My Party: shared setup, saved settings, group helpers and slash commands.
+-- Find My Party (WoW: Forever): shared setup, saved settings, group helpers and slash commands.
 local ADDON_NAME, ns = ...
 
 ns.TITLE = "Find My Party"
 ns.ARROW_TEXTURE = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\Arrow"
-ns.FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 
 ns.defaults = {
     names = {
@@ -18,7 +17,7 @@ ns.defaults = {
         scale = 1,
         x = 0,           -- arrow position, offset from the middle of the screen
         y = 150,
-        targets = {},    -- ["Name-Realm"] = true for each person to point at
+        targets = {},    -- [name] = true for each person to point at
     },
 }
 
@@ -39,76 +38,97 @@ function ns.Print(msg)
 end
 
 ---------------------------------------------------------------------------
+-- Secret values. Forever runs on the Midnight client, where the game can
+-- hand addons "secret" values (shown fine on screen, but Lua can't test or
+-- compare them). Anything that might be one is checked before it's used.
+---------------------------------------------------------------------------
+local issecretvalue = issecretvalue
+
+function ns.Readable(value)
+    return not (issecretvalue and issecretvalue(value))
+end
+
+-- A font that draws every alphabet (Latin, Cyrillic, Korean, Chinese) with a
+-- thick outline, at any size. SetFont with a single font file would drop the
+-- non-Latin letters, so set the font object and change only its height.
+function ns.SetBigFont(fontString, size)
+    fontString:SetFontObject(SystemFont_OutlineThick_Huge2 or GameFontNormalHuge)
+    if fontString.SetFontHeight then
+        fontString:SetFontHeight(size)
+    else
+        fontString:SetTextHeight(size)
+    end
+end
+
+---------------------------------------------------------------------------
 -- Friendly name plates. The game only lets addons draw over people's heads
--- by using their name plate, so friendly name plates have to be turned on.
+-- by using their name plate, so friendly player name plates must be on.
+-- The setting was renamed in the Midnight client; use whichever name exists.
 ---------------------------------------------------------------------------
 local GetCVarValue = (C_CVar and C_CVar.GetCVar) or GetCVar
 local SetCVarValue = (C_CVar and C_CVar.SetCVar) or SetCVar
-local FRIENDLY_PLATES_CVAR = "nameplateShowFriends"
+local FRIENDLY_PLATES_CVARS = { "nameplateShowFriendlyPlayers", "nameplateShowFriends" }
+
+local function FriendlyPlatesCVar()
+    for _, name in ipairs(FRIENDLY_PLATES_CVARS) do
+        if GetCVarValue(name) ~= nil then return name end
+    end
+end
 
 function ns.FriendlyPlatesSupported()
-    return GetCVarValue(FRIENDLY_PLATES_CVAR) ~= nil
+    return FriendlyPlatesCVar() ~= nil
 end
 
 function ns.FriendlyPlatesOn()
-    return GetCVarValue(FRIENDLY_PLATES_CVAR) == "1"
+    local cvar = FriendlyPlatesCVar()
+    return cvar ~= nil and GetCVarValue(cvar) == "1"
 end
 
 function ns.SetFriendlyPlates(on)
+    local cvar = FriendlyPlatesCVar()
+    if not cvar then return false end
     if InCombatLockdown() then
         ns.Print("Name plate settings can't be changed during combat. Try again after the fight.")
         return false
     end
-    SetCVarValue(FRIENDLY_PLATES_CVAR, on and "1" or "0")
+    SetCVarValue(cvar, on and "1" or "0")
     return true
 end
 
 ---------------------------------------------------------------------------
 -- Group helpers
 ---------------------------------------------------------------------------
-local function PlayerRealm()
-    local realm = GetNormalizedRealmName and GetNormalizedRealmName()
-    if not realm or realm == "" then
-        realm = (GetRealmName() or ""):gsub("[%s%-]", "")
-    end
-    return realm
-end
 
--- "Name-Realm" key used to remember who to point at, plus the short name.
-function ns.GetFullName(unit)
-    local name, realm = UnitName(unit)
-    if not name or name == "" or name == UNKNOWNOBJECT then return nil end
-    if realm and realm ~= "" then
-        realm = realm:gsub("[%s%-]", "")
-    else
-        realm = PlayerRealm()
-    end
-    return name .. "-" .. realm, name
-end
-
--- Everyone in the group except yourself, in group order.
+-- Everyone in the group except yourself, in group order. People are known by
+-- their first name: Forever has no realms, and UnitName's second value is a
+-- surname. The second return is false if the game is hiding someone's name
+-- right now (it can in combat); callers then keep what they had.
 function ns.GetGroupMembers()
-    local members = {}
+    local members, complete = {}, true
     local prefix, count
     if IsInRaid() then
         prefix, count = "raid", GetNumGroupMembers()
     else
         prefix, count = "party", GetNumSubgroupMembers()
     end
+    local myName = UnitName("player")
     for i = 1, count do
         local unit = prefix .. i
-        if UnitExists(unit) and not UnitIsUnit(unit, "player") then
-            local full, name = ns.GetFullName(unit)
-            if full then
+        if UnitExists(unit) then
+            local name = UnitName(unit)
+            if not ns.Readable(name) then
+                complete = false
+            elseif name and name ~= "" and name ~= UNKNOWNOBJECT and name ~= myName then
                 local _, class = UnitClass(unit)
-                members[#members + 1] = { unit = unit, full = full, name = name, class = class }
+                if not ns.Readable(class) then class = nil end
+                members[#members + 1] = { unit = unit, name = name, class = class }
             end
         end
     end
-    return members
+    return members, complete
 end
 
--- Called whenever any setting changes.
+-- Called whenever any setting or the group changes.
 function ns.RefreshAll()
     ns.Names:RefreshAll()
     ns.Arrows:Rebuild()
@@ -145,6 +165,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 
         self:RegisterEvent("PLAYER_LOGIN")
         self:RegisterEvent("PLAYER_ENTERING_WORLD")
+        self:RegisterEvent("PLAYER_REGEN_ENABLED")
         self:RegisterEvent("GROUP_ROSTER_UPDATE")
         self:RegisterEvent("UNIT_NAME_UPDATE")
         self:RegisterEvent("UNIT_CONNECTION")
@@ -163,7 +184,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         end
         ns.QueueGroupUpdate()
     elseif event == "UNIT_NAME_UPDATE" or event == "UNIT_CONNECTION" then
-        if arg1 and (arg1:find("^party") or arg1:find("^raid")) then
+        if type(arg1) == "string" and (arg1:find("^party") or arg1:find("^raid")) then
             ns.QueueGroupUpdate()
         end
     else
@@ -172,7 +193,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
 end)
 
 ---------------------------------------------------------------------------
--- Slash commands and the AddOns menu button (minimap compartment in retail)
+-- Slash commands and the AddOns button under the minimap
 ---------------------------------------------------------------------------
 SLASH_FINDMYPARTY1 = "/fmp"
 SLASH_FINDMYPARTY2 = "/findmyparty"

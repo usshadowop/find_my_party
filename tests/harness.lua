@@ -1,7 +1,16 @@
--- Minimal fake WoW client to exercise the addon's logic outside the game.
+-- Minimal fake WoW: Forever client to exercise the addon's logic outside the game.
 -- Run from the repository root:  lua5.1 tests/harness.lua FindMyParty
+--
+-- It copies the Forever behaviours the addon depends on (taken from Blizzard's
+-- Forever UI source and API docs): the renamed friendly name plate CVar,
+-- UnitName's second value being a surname, plates whose base frame must never
+-- be anchored to, and "secret" values that Lua can't test.
 local ADDON_DIR = arg[1] or "FindMyParty"
 local PI = math.pi
+
+---------------------------------------------------------------- secrets
+local SECRET = setmetatable({}, { __tostring = function() return "<secret>" end })
+function issecretvalue(v) return v == SECRET end
 
 ---------------------------------------------------------------- widgets
 local W = {}
@@ -9,6 +18,9 @@ local registry = {}      -- frames registered for events
 local allFrames = {}
 
 local function newObj(kind, parent)
+    if parent and parent._isBasePlate and kind ~= "PlateUnitFrame" then
+        error("addon frame parented to a name plate's base frame", 2)
+    end
     local o = { _kind = kind, _parent = parent, _shown = true, _alpha = 1, _scale = 1,
                 _scripts = {}, _events = {}, _w = 0, _h = 0, _text = "", _rot = 0,
                 _checked = false, _value = 0, _min = 0, _max = 1, _vscroll = 0, _points = {} }
@@ -18,6 +30,12 @@ local function newObj(kind, parent)
             return function() end -- any other API method is a harmless no-op
         end
     end })
+end
+
+local function checkAnchor(rel)
+    if type(rel) == "table" and rel._isBasePlate then
+        error("SetPoint would result in anchor family connection (anchored to a name plate's base frame)", 3)
+    end
 end
 
 function W:SetScript(s, f) self._scripts[s] = f end
@@ -38,16 +56,19 @@ function W:SetHeight(h) self._h = h end
 function W:GetWidth() return self._w end
 function W:GetHeight() return self._h end
 function W:GetCenter() return 600, 400 end
-function W:SetPoint(...) self._points[#self._points + 1] = { ... } end
+function W:SetPoint(point, rel, ...) checkAnchor(rel); self._points[#self._points + 1] = { point, rel, ... } end
+function W:SetAllPoints(rel) checkAnchor(rel); self._points[#self._points + 1] = { "ALL", rel } end
 function W:ClearAllPoints() self._points = {} end
-function W:SetText(t) self._text = t == nil and "" or tostring(t) end
+function W:SetText(t) self._text = t end
 function W:GetText() return self._text end
 function W:SetFormattedText(fmt, ...) self._text = fmt:format(...) end
-function W:GetStringWidth() return #self._text * 7 end
+function W:GetStringWidth() return #tostring(self._text) * 7 end
 function W:SetTextColor(r, g, b) self._color = { r, g, b } end
 function W:SetVertexColor(r, g, b) self._vcolor = { r, g, b } end
 function W:SetColorTexture(r, g, b, a) self._ccolor = { r, g, b, a } end
-function W:SetFont(f, s, fl) assert(type(f) == "string" and type(s) == "number" and type(fl) == "string", "bad SetFont args"); self._font = { f, s, fl } end
+function W:SetFont() error("SetFont with one font file drops non-Latin letters; use SetFontObject", 2) end
+function W:SetFontObject(o) assert(o ~= nil, "nil font object"); self._fontObject = o end
+function W:SetFontHeight(h) assert(type(h) == "number"); self._fontHeight = h end
 function W:SetRotation(r) self._rot = r end
 function W:SetChecked(c) self._checked = c and true or false end
 function W:GetChecked() return self._checked end
@@ -65,12 +86,13 @@ function W:GetVerticalScroll() return self._vscroll end
 function W:EnableMouse(e) self._mouse = e end
 function W:StartMoving() self._moving = true end
 function W:StopMovingOrSizing() self._moving = false end
+function W:Raise() self._raised = (self._raised or 0) + 1 end
 function W:Click() if self._kind == "CheckButton" then self._checked = not self._checked end; if self._scripts.OnClick then self._scripts.OnClick(self, "LeftButton") end end
 
 function CreateFrame(kind, name, parent, template)
     local f = newObj(kind, parent)
     if name then _G[name] = f end
-    if template == "UIPanelButtonTemplate" or template == "UIPanelCloseButton" then f._template = template end
+    f._template = template
     allFrames[#allFrames + 1] = f
     return f
 end
@@ -88,21 +110,26 @@ C_Timer = {
     NewTicker = function(_, fn) tickers[#tickers + 1] = fn; return {} end,
 }
 local function RunTimers()
-    local list = timers; timers = {}
-    for _, fn in ipairs(list) do fn() end
+    for _ = 1, 3 do
+        local list = timers; timers = {}
+        for _, fn in ipairs(list) do fn() end
+    end
 end
 local function Tick() for _, fn in ipairs(tickers) do fn() end end
 
 ---------------------------------------------------------------- game state
 local state = {
-    cvars = { nameplateShowFriends = "0" },
+    -- Forever only knows the new name of the friendly player plates setting.
+    cvars = { nameplateShowFriendlyPlayers = "0" },
     combat = false,
     raid = false,
-    party = {},          -- array of { name=, realm=, class=, online=, pos={n,w,inst} }
+    party = {},          -- array of { name=, surname=, class=, online=, pos={n,w,inst}, mapPos={x,y} }
     plates = {},         -- unit token -> { kind = "member"/"stranger"/"enemy", of = "party1" }
     playerPos = { 0, 0, 1 },
     facing = 0,
     inInstance = false,
+    secretNames = false, -- the game hiding group members' names (combat)
+    noUnitPosition = false,
 }
 
 local function partyIndex(unit) return tonumber(unit:match("^party(%d)$")) end
@@ -111,15 +138,12 @@ local function resolve(unit)
     local i = partyIndex(unit)
     if i then return state.party[i] and unit or nil end
     local p = state.plates[unit]
-    if p then
-        if p.secret then error("attempt to compare a secret value") end
-        return p.of or unit
-    end
+    if p then return p.of or unit end
 end
 
-STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
 UNKNOWNOBJECT = "Unknown"
 BackdropTemplateMixin = {}
+SystemFont_OutlineThick_Huge2 = { _font = "outline thick, every alphabet" }
 UISpecialFrames = {}
 SlashCmdList = {}
 RAID_CLASS_COLORS = { PRIEST = { r = 1, g = 1, b = 1 }, WARRIOR = { r = 0.78, g = 0.61, b = 0.43 } }
@@ -134,8 +158,6 @@ function print(msg) printed[#printed + 1] = msg end
 
 UIParent = newObj("Frame")
 function UIParent:GetCenter() return 600, 400 end
-SettingsPanel = newObj("Frame"); SettingsPanel._shown = false
-function HideUIPanel(f) f:Hide() end
 local registeredCategory
 Settings = {
     RegisterCanvasLayoutCategory = function(panel, name) return { panel = panel, name = name } end,
@@ -148,32 +170,38 @@ function ColorPickerFrame:GetColorRGB() return 0.2, 0.4, 0.6 end
 
 C_CVar = {
     GetCVar = function(n) return state.cvars[n] end,
-    SetCVar = function(n, v) assert(type(v) == "string"); state.cvars[n] = v; FireEvent("CVAR_UPDATE", n, v) end,
+    SetCVar = function(n, v) assert(type(v) == "string"); assert(state.cvars[n] ~= nil, "unknown CVar " .. n); state.cvars[n] = v; FireEvent("CVAR_UPDATE", n, v) end,
 }
 function InCombatLockdown() return state.combat end
-function GetNormalizedRealmName() return "MyRealm" end
-function GetRealmName() return "My Realm" end
 function IsInRaid() return state.raid end
 function GetNumSubgroupMembers() return #state.party end
 function GetNumGroupMembers() return #state.party + 1 end
 function IsInInstance() return state.inInstance end
 function UnitExists(u) return resolve(u) ~= nil end
-function UnitIsUnit(a, b) return resolve(a) == resolve(b) end
+function UnitIsUnit(a, b)
+    -- Forever: comparing a name plate unit can be secret
+    if state.plates[a] and state.plates[a].secretCompare then return SECRET end
+    return resolve(a) == resolve(b)
+end
 function UnitName(u)
     local r = resolve(u)
-    if r == "player" then return "Me" end
+    if r == "player" then return "Me", "Myself" end
     local i = r and partyIndex(r)
-    if i then local p = state.party[i]; return p.name, p.realm end
+    if i then
+        if state.secretNames then return SECRET, SECRET end
+        local p = state.party[i]; return p.name, p.surname
+    end
     local p = state.plates[u]
-    if p then return p.name or "Somebody" end
+    if p then return p.name or "Somebody", "Surname" end
 end
 function UnitClass(u) local i = partyIndex(resolve(u) or ""); if i then return "x", state.party[i].class end end
 function UnitIsConnected(u) local i = partyIndex(resolve(u) or ""); if i then return state.party[i].online ~= false end return true end
 function UnitIsPlayer(u) local p = state.plates[u]; if p and p.npc then return false end return true end
 function UnitInParty(u) local r = resolve(u); return r ~= nil and partyIndex(r) ~= nil end
-function UnitInRaid() return nil end
+function UnitInRaid(u) local p = state.plates[u]; if p and p.secretRaid then return SECRET end return nil end
 function UnitIsFriend(_, u) local p = state.plates[u]; return not (p and p.kind == "enemy") end
 function UnitPosition(u)
+    if state.noUnitPosition then return nil end
     local r = resolve(u)
     if r == "player" then return state.playerPos[1], state.playerPos[2], 0, state.playerPos[3] end
     local i = r and partyIndex(r)
@@ -184,24 +212,47 @@ function UnitPosition(u)
 end
 function GetPlayerFacing() return state.facing end
 
+-- Map fallback: positions are plain {x, y} tables (no GetXY), like some Forever returns.
+C_Map = {
+    GetBestMapForUnit = function() return 1429 end,
+    GetPlayerMapPosition = function(_, u)
+        local r = resolve(u)
+        if r == "player" then return { x = 0.5, y = 0.5 } end
+        local i = r and partyIndex(r)
+        if i and state.party[i].mapPos then return { x = state.party[i].mapPos[1], y = state.party[i].mapPos[2] } end
+    end,
+    GetWorldPosFromMapPos = function(_, pos)
+        -- 1000 x 1000 yard map; north decreases with y, west decreases with x
+        return 0, { x = (0.5 - pos.y) * 1000, y = (0.5 - pos.x) * 1000 }
+    end,
+}
+
+-- Name plates: a base frame (never to be anchored to) holding Blizzard's UnitFrame.
 local plateFrames = {}
+local function newPlate(unit)
+    local base = newObj("Frame"); base._isBasePlate = true
+    local uf = newObj("PlateUnitFrame", base)
+    uf.name = newObj("FontString", uf)
+    uf.HealthBarsContainer = newObj("Frame", uf)
+    uf.showOnlyName = false
+    function uf:IsShowOnlyName() return self.showOnlyName == true end
+    base.UnitFrame = uf
+    return base
+end
 C_NamePlate = {
     GetNamePlateForUnit = function(u)
         if not state.plates[u] then return nil end
-        plateFrames[u] = plateFrames[u] or (function()
-            local p = newObj("Frame"); p.UnitFrame = newObj("Frame", p); return p
-        end)()
+        plateFrames[u] = plateFrames[u] or newPlate(u)
         return plateFrames[u]
     end,
 }
-C_Map = { GetBestMapForUnit = function() return nil end }
 
 ---------------------------------------------------------------- helpers
 local passed, failed = 0, 0
 local function check(cond, label)
     if cond then passed = passed + 1 else failed = failed + 1; realPrint("FAIL: " .. label) end
 end
-local function near(a, b) return math.abs(a - b) < 1e-6 end
+local function near(a, b) return type(a) == "number" and math.abs(a - b) < 1e-6 end
 
 ---------------------------------------------------------------- load addon
 local ns = {}
@@ -217,43 +268,61 @@ check(FindMyPartyDB and FindMyPartyDB.names.size == 20, "defaults applied")
 check(registeredCategory and registeredCategory.name == "Find My Party", "settings page registered")
 
 FireEvent("PLAYER_LOGIN")
-check(state.cvars.nameplateShowFriends == "1", "first login turns on friendly plates")
+check(state.cvars.nameplateShowFriendlyPlayers == "1", "first login turns on friendly player plates (Forever CVar name)")
 check(ns.db.setupDone == true, "setupDone recorded")
 RunTimers()
 
 ---------------------------------------------------------------- group + nameplates
 state.party = {
-    { name = "Grandpa", realm = nil, class = "PRIEST", pos = { 0, 100, 1 } },
-    { name = "Bob", realm = "Other Realm", class = "WARRIOR", pos = { 50, 0, 1 } },
+    { name = "Grandpa", surname = "Oakheart", class = "PRIEST", pos = { 0, 100, 1 } },
+    { name = "Bob", surname = "Stone", class = "WARRIOR", pos = { 50, 0, 1 } },
 }
 FireEvent("GROUP_ROSTER_UPDATE")
 RunTimers()
 
 local members = ns.GetGroupMembers()
 check(#members == 2, "two group members")
-check(members[1].full == "Grandpa-MyRealm", "same-realm full name: " .. tostring(members[1].full))
-check(members[2].full == "Bob-OtherRealm", "cross-realm full name: " .. tostring(members[2].full))
+check(members[1].name == "Grandpa", "known by first name, not 'Name-Surname': " .. tostring(members[1].name))
 
 state.plates.nameplate1 = { kind = "member", of = "party1" }
 state.plates.nameplate2 = { kind = "stranger", name = "Stranger" }
 state.plates.nameplate3 = { kind = "enemy", name = "Orc" }
-state.plates.nameplate4 = { kind = "stranger", name = "Hidden", secret = true }
-for i = 1, 4 do FireEvent("NAME_PLATE_UNIT_ADDED", "nameplate" .. i) end
-local p1, p2, p3, p4 = plateFrames.nameplate1, plateFrames.nameplate2, plateFrames.nameplate3, plateFrames.nameplate4
-
-local function labelOf(plate)
-    for _, f in ipairs(allFrames) do if f._parent == plate and f.text then return f end end
+state.plates.nameplate4 = { kind = "stranger", name = "Hidden", secretRaid = true }
+state.plates.nameplate5 = { kind = "member", of = "party2", secretCompare = true }
+for i = 1, 5 do
+    local plate = C_NamePlate.GetNamePlateForUnit("nameplate" .. i)
+    plate.UnitFrame.name:SetText(i == 1 and "Grandpa Oakheart" or "")
+    FireEvent("NAME_PLATE_UNIT_ADDED", "nameplate" .. i)
 end
-local l1 = labelOf(p1)
-check(p1.UnitFrame:GetAlpha() == 0, "party member's game plate hidden")
-check(l1 and l1:IsShown() and l1.text:GetText() == "Grandpa", "party member gets our label")
-check(l1 and l1.text._font[2] == 20, "label uses chosen size")
+RunTimers()
+local p1, p2, p3, p4, p5 = plateFrames.nameplate1, plateFrames.nameplate2, plateFrames.nameplate3, plateFrames.nameplate4, plateFrames.nameplate5
+local uf1 = p1.UnitFrame
+
+local function labelOf(uf)
+    for _, f in ipairs(allFrames) do if f._parent == uf and f.text then return f end end
+end
+local l1 = labelOf(uf1)
+check(l1 ~= nil, "party member gets our label, parented to plate.UnitFrame")
+check(l1 and l1:IsShown() and l1.text:GetText() == "Grandpa Oakheart", "label copies Blizzard's name text (with surname)")
+check(uf1.name:GetAlpha() == 0, "only Blizzard's name text is hidden")
+check(uf1:GetAlpha() == 1 and uf1.HealthBarsContainer:GetAlpha() == 1, "party member's health bar and plate stay visible")
+check(l1 and l1.text._fontObject == SystemFont_OutlineThick_Huge2 and l1.text._fontHeight == 20, "label uses outlined multi-alphabet font at chosen size")
 check(l1 and near(l1.text._color[1], 1) and near(l1.text._color[3], 0.85), "label uses chosen color")
 check(l1 and near(l1.marker._rot, PI) and l1.marker:IsShown(), "marker points down")
+check(l1 and l1.text._points[1][1] == "BOTTOM" and l1.text._points[1][3] == "TOP", "name drawn just above the health bar")
 check(p2.UnitFrame:GetAlpha() == 0, "stranger's plate hidden (hideOthers)")
-check(labelOf(p2) == nil, "stranger gets no label")
+check(labelOf(p2.UnitFrame) == nil, "stranger gets no label")
 check(p3.UnitFrame:GetAlpha() == 1, "enemy plate untouched")
-check(p4.UnitFrame:GetAlpha() == 1, "plate with hidden info left alone (no error)")
+check(p4.UnitFrame:GetAlpha() == 1, "plate whose group membership is secret is left alone")
+check(labelOf(p5.UnitFrame) and labelOf(p5.UnitFrame):IsShown(), "secret UnitIsUnit doesn't stop a member's label")
+check(labelOf(p5.UnitFrame).text:GetText() == "Bob", "falls back to UnitName before Blizzard fills the plate in")
+
+-- Blizzard's "show only name" mode: our name sits where the bar would be
+uf1.showOnlyName = true
+Tick()
+check(l1.text._points[1][1] == "CENTER", "name-only mode centers the name")
+uf1.showOnlyName = false
+Tick()
 
 ns.db.names.hideOthers = false
 ns.RefreshAll()
@@ -262,19 +331,28 @@ check(p2.UnitFrame:GetAlpha() == 1, "stranger plate restored when hideOthers off
 ns.db.names.size = 32
 ns.db.names.marker = false
 Tick()
-check(l1.text._font[2] == 32, "ticker restyles size")
+check(l1.text._fontHeight == 32, "ticker restyles size")
 check(not l1.marker:IsShown(), "marker can be hidden")
 
 ns.db.names.enabled = false
 ns.RefreshAll()
-check(p1.UnitFrame:GetAlpha() == 1 and not l1:IsShown(), "disabling restores the game's plate")
+check(uf1.name:GetAlpha() == 1 and not l1:IsShown(), "disabling puts Blizzard's name back")
 ns.db.names.enabled = true
 ns.RefreshAll()
-check(p1.UnitFrame:GetAlpha() == 0 and l1:IsShown(), "re-enabling works")
+check(uf1.name:GetAlpha() == 0 and l1:IsShown(), "re-enabling works")
 
 FireEvent("NAME_PLATE_UNIT_REMOVED", "nameplate1")
-check(p1.UnitFrame:GetAlpha() == 1 and not l1:IsShown(), "removed plate cleaned up")
+check(uf1.name:GetAlpha() == 1 and not l1:IsShown(), "removed plate cleaned up for reuse")
+-- the pooled plate is reused for a stranger
 state.plates.nameplate1 = nil
+state.plates.nameplate6 = { kind = "stranger", name = "Passerby" }
+plateFrames.nameplate6 = p1
+ns.db.names.hideOthers = true
+FireEvent("NAME_PLATE_UNIT_ADDED", "nameplate6")
+check(uf1:GetAlpha() == 0 and not l1:IsShown() and uf1.name:GetAlpha() == 1, "reused plate shows no stale label")
+FireEvent("NAME_PLATE_UNIT_REMOVED", "nameplate6")
+check(uf1:GetAlpha() == 1, "reused plate fully restored")
+state.plates.nameplate6 = nil
 Tick()
 
 ---------------------------------------------------------------- arrows
@@ -282,7 +360,7 @@ local container
 for _, f in ipairs(allFrames) do if f._scripts.OnUpdate then container = f end end
 check(container and not container:IsShown(), "no arrows until someone is picked")
 
-ns.db.arrows.targets["Grandpa-MyRealm"] = true
+ns.db.arrows.targets["Grandpa"] = true
 ns.RefreshAll()
 check(container:IsShown(), "arrow container shows for a picked member")
 
@@ -298,37 +376,39 @@ end
 local function update() container._scripts.OnUpdate(container, 1) end
 
 -- Grandpa at north=0, west=100 -> due west of us.
-state.facing = 0                       -- facing north
+state.facing = 0
 update()
 local w1 = widget(1)
 check(w1.name:GetText() == "Grandpa", "arrow labelled with name")
-check(near(w1.arrow._rot, PI / 2), "facing north, target west -> arrow points left (+90deg CCW), got " .. w1.arrow._rot)
-check(w1.info:GetText() == "100 yds", "distance shown: " .. w1.info:GetText())
+check(w1.name._fontObject == SystemFont_OutlineThick_Huge2, "arrow name uses multi-alphabet font")
+check(near(w1.arrow._rot, PI / 2), "facing north, target west -> arrow points left (+90deg CCW), got " .. tostring(w1.arrow._rot))
+check(w1.info:GetText() == "100 yds", "distance shown: " .. tostring(w1.info:GetText()))
 
-state.facing = PI / 2                  -- facing west
+state.facing = PI / 2
 update()
 check(near(w1.arrow._rot, 0), "facing west, target west -> straight ahead")
 
-state.facing = PI                      -- facing south
+state.facing = PI
 update()
 check(near(w1.arrow._rot, -PI / 2), "facing south, target west -> arrow points right")
 
-state.party[1].pos = { -30, 0, 1 }     -- due south
+state.party[1].pos = { -30, 0, 1 }
 state.facing = 0
 update()
 check(near(math.abs(w1.arrow._rot), PI), "facing north, target south -> behind you")
 
-state.party[1].pos = { 0, -2000, 1 }   -- far east
+state.party[1].pos = { 0, -2000, 1 }
 update()
 check(near(w1.arrow._rot, -PI / 2), "target east -> right")
-check(w1.info:GetText() == "2,000 yds", "big distances get commas: " .. w1.info:GetText())
+check(w1.info:GetText() == "2,000 yds", "big distances get commas: " .. tostring(w1.info:GetText()))
 
 state.facing = nil
 update()
-check(not w1.arrow:IsShown() and w1.info:GetText() == "2,000 yds east", "no facing -> compass text: " .. w1.info:GetText())
+check(not w1.arrow:IsShown() and w1.info:GetText() == "2,000 yds east", "no facing -> compass text: " .. tostring(w1.info:GetText()))
+state.facing = SECRET
 state.party[1].pos = { 100, 100, 1 }
 update()
-check(w1.info:GetText() == "141 yds north-west", "compass north-west: " .. w1.info:GetText())
+check(w1.info:GetText() == "141 yds north-west", "secret facing -> compass text: " .. tostring(w1.info:GetText()))
 state.facing = 0
 
 state.party[1].pos = { 1, 1, 1 }
@@ -339,31 +419,50 @@ state.party[1].pos = { 0, 100, 2 }
 update()
 check(not w1.arrow:IsShown() and w1.info:GetText() == "In a different area", "different continent")
 
+-- UnitPosition unavailable: fall back to map positions (plain x/y tables)
+state.noUnitPosition = true
+state.party[1].mapPos = { 0.4, 0.5 }   -- 100 yards west of the player (map x smaller = west)
+update()
+check(w1.arrow:IsShown() and near(w1.arrow._rot, PI / 2), "map fallback points west, got " .. tostring(w1.arrow._rot))
+check(w1.info:GetText() == "100 yds", "map fallback distance: " .. tostring(w1.info:GetText()))
+state.party[1].mapPos = nil
+update()
+check(w1.info:GetText() == "Can't tell where they are", "no position at all: " .. tostring(w1.info:GetText()))
+state.noUnitPosition = false
+state.party[1].pos = { 0, 100, 1 }
+
 state.inInstance = true
 update()
-check(w1.info:GetText() == "Arrows don't work in dungeons", "instance message: " .. w1.info:GetText())
+check(w1.info:GetText() == "Arrows don't work in dungeons", "instance message: " .. tostring(w1.info:GetText()))
 state.inInstance = false
 
 state.party[1].online = false
 update()
 check(w1.info:GetText() == "Offline", "offline message")
 state.party[1].online = true
-state.party[1].pos = { 0, 100, 1 }
 update()
 check(w1.arrow:IsShown(), "arrow returns")
 check(near(w1.arrow._vcolor[1], 1) and near(w1.arrow._vcolor[3], 0.85), "arrow tinted with name color")
+
+-- names hidden by the game mid-combat: arrows stay as they were
+state.secretNames = true
+FireEvent("GROUP_ROSTER_UPDATE"); RunTimers()
+check(widget(1) and widget(1).name:GetText() == "Grandpa", "secret names in combat keep existing arrows")
+state.secretNames = false
+FireEvent("PLAYER_REGEN_ENABLED"); RunTimers()
+check(widget(1) and widget(1).name:GetText() == "Grandpa", "arrows rebuilt after combat")
 
 ---------------------------------------------------------------- options window
 SlashCmdList.FINDMYPARTY("")
 local opts = FindMyPartyOptions
 check(opts and opts:IsShown(), "/fmp opens the window")
+check(opts._raised and opts._raised > 0, "window raised above other HIGH windows")
 check(UISpecialFrames[1] == "FindMyPartyOptions", "escape closes window")
 
--- find member rows: CheckButtons whose label has a member name
 local function rows()
     local list = {}
     for _, f in ipairs(allFrames) do
-        if f._kind == "CheckButton" and f.full and f._shown then list[#list + 1] = f end
+        if f._kind == "CheckButton" and f.key and f._shown then list[#list + 1] = f end
     end
     return list
 end
@@ -374,23 +473,22 @@ check(r[2].label:GetText() == "Bob" and not r[2]:GetChecked(), "Bob row unchecke
 check(near(r[2].label._color[1], 0.78), "class colored name")
 
 r[2]:Click()
-check(ns.db.arrows.targets["Bob-OtherRealm"] == true, "ticking Bob saves him")
+check(ns.db.arrows.targets["Bob"] == true, "ticking Bob saves him")
 update()
 local w2 = widget(2)
 check(w2 and w2.name:GetText() == "Bob", "second arrow for Bob")
 check(w1._mouse == true, "arrows draggable while window open")
 
--- Bob leaves the group: his row stays as "(not in group)"
 table.remove(state.party, 2)
+state.plates.nameplate5 = nil
 FireEvent("GROUP_ROSTER_UPDATE"); RunTimers()
 r = rows()
 check(#r == 2 and r[2].label:GetText():find("not in group"), "remembered person shown as not in group")
 check(widget(2) == nil, "no arrow for someone not in the group")
 r[2]:Click()
-check(ns.db.arrows.targets["Bob-OtherRealm"] == nil, "unticking forgets them")
+check(ns.db.arrows.targets["Bob"] == nil, "unticking forgets them")
 check(#rows() == 1, "row removed")
 
--- sliders, presets, color picker
 local sliders = {}
 for _, f in ipairs(allFrames) do if f._kind == "Slider" then sliders[#sliders + 1] = f end end
 check(#sliders == 2, "two sliders")
@@ -403,29 +501,27 @@ check(container:GetScale() == ns.db.arrows.scale, "arrow scale applied")
 local swatches = {}
 for _, f in ipairs(allFrames) do if f._kind == "Button" and f.color and f._parent == opts then swatches[#swatches + 1] = f end end
 check(#swatches == 8, "1 current + 7 preset swatches, got " .. #swatches)
-swatches[3]:Click() -- orange
+swatches[3]:Click()
 check(near(ns.db.names.color.g, 0.5), "preset sets color")
-swatches[1]:Click() -- current swatch -> picker
-check(pickerInfo and pickerInfo.swatchFunc, "color picker opened")
+swatches[1]:Click()
+check(pickerInfo and pickerInfo.swatchFunc and pickerInfo.hasOpacity == false, "color picker opened with Forever's SetupColorPickerAndShow")
 pickerInfo.swatchFunc()
 check(near(ns.db.names.color.r, 0.2) and near(ns.db.names.color.b, 0.6), "picker changes color")
 pickerInfo.cancelFunc()
 check(near(ns.db.names.color.g, 0.5), "cancel restores previous color")
 
--- friendly plates checkbox mirrors the game setting
-state.cvars.nameplateShowFriends = "0"
-FireEvent("CVAR_UPDATE", "nameplateShowFriends", "0")
+state.cvars.nameplateShowFriendlyPlayers = "0"
+FireEvent("CVAR_UPDATE", "nameplateShowFriendlyPlayers", "0")
 local friendlyBox
-for _, f in ipairs(allFrames) do if f._kind == "CheckButton" and f.label and f.label:GetText():find("Friendly name plates") then friendlyBox = f end end
-check(friendlyBox and not friendlyBox:GetChecked(), "checkbox follows Shift+V changes")
+for _, f in ipairs(allFrames) do if f._kind == "CheckButton" and f.label and tostring(f.label:GetText()):find("Friendly name plates") then friendlyBox = f end end
+check(friendlyBox and not friendlyBox:GetChecked(), "checkbox follows the game setting")
 friendlyBox:Click()
-check(state.cvars.nameplateShowFriends == "1" and friendlyBox:GetChecked(), "checkbox turns plates on")
+check(state.cvars.nameplateShowFriendlyPlayers == "1" and friendlyBox:GetChecked(), "checkbox turns plates on")
 state.combat = true
 friendlyBox:Click()
-check(state.cvars.nameplateShowFriends == "1" and friendlyBox:GetChecked(), "can't change in combat, box reverts")
+check(state.cvars.nameplateShowFriendlyPlayers == "1" and friendlyBox:GetChecked(), "can't change in combat, box reverts")
 state.combat = false
 
--- dragging the arrows
 w1._scripts.OnDragStart(w1)
 check(container._moving, "drag starts while window open")
 opts:Hide()
@@ -436,7 +532,6 @@ check(container:IsShown(), "arrows stay up after closing window")
 SlashCmdList.FINDMYPARTY("reset")
 check(ns.db.arrows.x == 0 and ns.db.arrows.y == 150, "reset position")
 
--- placeholder when nobody is picked
 wipe(ns.db.arrows.targets)
 ns.RefreshAll()
 check(not container:IsShown(), "hidden when nobody is picked")
@@ -445,11 +540,18 @@ check(container:IsShown(), "placeholder shown while setting up")
 FindMyParty_OnAddonCompartmentClick()
 check(not opts:IsShown(), "compartment click toggles window")
 
--- not in a group at all
 state.party = {}
 FireEvent("GROUP_ROSTER_UPDATE"); RunTimers()
 SlashCmdList.FINDMYPARTY("")
 check(#rows() == 0, "empty list when solo")
+
+-- the settings page button just opens our window
+opts:Hide()
+local openButton
+for _, f in ipairs(allFrames) do if f._kind == "Button" and f._template == "UIPanelButtonTemplate" and f._parent == registeredCategory.panel then openButton = f end end
+check(openButton ~= nil, "settings page has an open button")
+openButton:Click()
+check(opts:IsShown(), "settings page button opens the window")
 
 realPrint(("%d passed, %d failed"):format(passed, failed))
 for _, m in ipairs(printed) do realPrint("  chat: " .. m) end

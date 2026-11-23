@@ -26,16 +26,24 @@ local elapsedSinceUpdate = 0
 -- Positions
 ---------------------------------------------------------------------------
 
+local Readable = ns.Readable
+
+local function AllReadable(...)
+    for i = 1, select("#", ...) do
+        if not Readable((select(i, ...))) then return false end
+    end
+    return true
+end
+
 -- World coordinates from the map (fallback for when UnitPosition gives nothing).
+-- Positions are read with .x/.y: not every position the game returns has GetXY.
 local function MapWorldPosition(unit, mapID)
     local pos = C_Map.GetPlayerMapPosition(mapID, unit)
-    if not pos then return end
-    local x, y = pos:GetXY()
-    if not x or (x == 0 and y == 0) then return end
+    if not pos or not AllReadable(pos.x, pos.y) then return end
+    if not pos.x or (pos.x == 0 and pos.y == 0) then return end
     local continent, world = C_Map.GetWorldPosFromMapPos(mapID, pos)
-    if not world then return end
-    local north, west = world:GetXY()
-    return north, west, continent
+    if not world or not AllReadable(world.x, world.y, continent) then return end
+    return world.x, world.y, continent
 end
 
 -- Returns playerNorth, playerWest, targetNorth, targetWest (in yards),
@@ -43,6 +51,9 @@ end
 local function GetPositions(unit)
     local pN, pW, _, pInstance = UnitPosition("player")
     local tN, tW, _, tInstance = UnitPosition(unit)
+    if not AllReadable(pN, pW, pInstance, tN, tW, tInstance) then
+        pN, tN = nil, nil
+    end
     if pN and tN then
         if pInstance ~= tInstance then return nil, "area" end
         return pN, pW, tN, tW
@@ -111,11 +122,11 @@ local function CreateWidget()
     w.arrow:SetPoint("TOP", w, "TOP", 0, 0)
 
     w.name = w:CreateFontString(nil, "OVERLAY")
-    w.name:SetFont(ns.FONT, 15, "OUTLINE")
+    ns.SetBigFont(w.name, 16)
     w.name:SetPoint("TOP", w.arrow, "BOTTOM", 0, -2)
 
     w.info = w:CreateFontString(nil, "OVERLAY")
-    w.info:SetFont(ns.FONT, 13, "OUTLINE")
+    ns.SetBigFont(w.info, 13)
     w.info:SetTextColor(1, 1, 1)
     w.info:SetPoint("TOP", w.name, "BOTTOM", 0, -2)
 
@@ -151,7 +162,7 @@ local function UpdateWidget(w, unit)
     end
 
     local facing = GetPlayerFacing()
-    if facing then
+    if facing and Readable(facing) then
         w.arrow:SetRotation(bearing - facing)
         w.arrow:SetAlpha(1)
         w.arrow:Show()
@@ -199,11 +210,17 @@ function Arrows:Rebuild()
     local editing = ns.Options:IsShown()
     if moving and not editing then StopMove() end
 
-    wipe(tracked)
-    if db.enabled then
-        for _, member in ipairs(ns.GetGroupMembers()) do
-            if db.targets[member.full] then
-                tracked[#tracked + 1] = { unit = member.unit, name = member.name }
+    if not db.enabled then
+        wipe(tracked)
+    else
+        local members, complete = ns.GetGroupMembers()
+        -- If the game is hiding names right now (combat), keep the arrows we have.
+        if complete then
+            wipe(tracked)
+            for _, member in ipairs(members) do
+                if db.targets[member.name] then
+                    tracked[#tracked + 1] = { unit = member.unit, name = member.name }
+                end
             end
         end
     end

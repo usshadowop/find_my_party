@@ -1,75 +1,114 @@
 -- Colored, resizable names over party members' heads.
 --
 -- Addons can't recolor the game's own floating names, but they can draw on
--- name plates. For each party member's (friendly) name plate we hide the
--- game's small blue/green plate and put our own big, colored name there
--- instead. Optionally everyone else's friendly plate is hidden too, so in a
--- crowded city only your party stands out.
+-- name plates. On each party member's friendly name plate we hide only
+-- Blizzard's small name text and draw our own big, colored name in the same
+-- spot; the health bar and everything else stay as they are. Optionally the
+-- plates of everyone else are hidden, so in a crowded city only your party
+-- stands out.
+--
+-- Forever rules followed here (from its UI source and other Forever addons):
+--  * Never anchor to the name plate's base frame (it errors with "anchor
+--    family connection" and breaks Blizzard's own plates). Everything is
+--    parented and anchored to plate.UnitFrame and its parts instead.
+--  * Plates are pooled, so everything changed is put back when one goes away.
+--  * Friendly plates inside dungeons and raids belong to Blizzard alone;
+--    C_NamePlate never hands them to addons, so they're simply never seen.
 local _, ns = ...
 
 local Names = {}
 ns.Names = Names
 
-local plateUnits = {}  -- [plate] = unit token shown on it
-local labels = {}      -- [plate] = our label frame
-local hidden = {}      -- [plate] = true while we have hidden the game's plate graphics
-
+local Readable = ns.Readable
 local GetNamePlateForUnit = C_NamePlate and C_NamePlate.GetNamePlateForUnit
 
+local records = {}  -- [unit token] = { frame = plate.UnitFrame, ... } while on screen
+local labels = {}   -- [plate.UnitFrame] = our label, reused as plates are pooled
+
+local function UnitFrameFor(unit)
+    local plate = GetNamePlateForUnit(unit)
+    return plate and plate.UnitFrame
+end
+
+-- "member", "other" (friendly, not in the group), "enemy", "self",
+-- or nil when the game won't say right now.
 local function Classify(unit)
-    if UnitIsUnit(unit, "player") then return "self" end
-    if UnitIsPlayer(unit) and (UnitInParty(unit) or UnitInRaid(unit)) then return "member" end
+    local isMe = UnitIsUnit(unit, "player")      -- may be secret
+    if Readable(isMe) and isMe then return "self" end
+    if UnitIsPlayer(unit) then
+        if UnitInParty(unit) then return "member" end
+        local raidIndex = UnitInRaid(unit)        -- may be secret
+        if not Readable(raidIndex) then return nil end
+        if raidIndex then return "member" end
+    end
     if UnitIsFriend("player", unit) then return "other" end
     return "enemy"
 end
 
-local function SetGamePlateHidden(plate, hide)
-    local unitFrame = plate.UnitFrame
-    if not unitFrame then return end
-    if hide then
-        if unitFrame:GetAlpha() ~= 0 then unitFrame:SetAlpha(0) end
-        hidden[plate] = true
-    elseif hidden[plate] then
-        unitFrame:SetAlpha(1)
-        hidden[plate] = nil
-    end
-end
-
-local function HideLabel(plate)
-    local label = labels[plate]
-    if label then label:Hide() end
-end
-
-local function GetLabel(plate)
-    local label = labels[plate]
+---------------------------------------------------------------------------
+-- Our label
+---------------------------------------------------------------------------
+local function GetLabel(frame)
+    local label = labels[frame]
     if label then return label end
 
-    label = CreateFrame("Frame", nil, plate)
-    label:SetSize(1, 1)
-    label:SetPoint("BOTTOM", plate, "CENTER", 0, 0)
-    -- Keep our size and brightness no matter how far away they are.
-    if label.SetIgnoreParentScale then label:SetIgnoreParentScale(true) end
-    if label.SetIgnoreParentAlpha then label:SetIgnoreParentAlpha(true) end
-
+    label = CreateFrame("Frame", nil, frame)
+    label:SetAllPoints(frame)
+    -- A row as wide as the plate and as tall as the health bar, so the name is
+    -- centered on the plate (the bar itself sits a little left of center).
+    label.row = CreateFrame("Frame", nil, label)
     label.text = label:CreateFontString(nil, "OVERLAY")
-    label.text:SetPoint("BOTTOM", label, "BOTTOM", 0, 0)
-
+    label.text:SetJustifyH("CENTER")
+    label.text:SetWordWrap(false)
     label.marker = label:CreateTexture(nil, "OVERLAY")
     label.marker:SetTexture(ns.ARROW_TEXTURE)
     label.marker:SetRotation(math.pi) -- point down at the player
     label.marker:SetPoint("BOTTOM", label.text, "TOP", 0, 2)
 
-    labels[plate] = label
+    labels[frame] = label
     return label
 end
 
-local function StyleLabel(label, unit)
+local function PlaceLabel(label, frame)
+    local container = frame.HealthBarsContainer or frame.healthBar
+    local row, text = label.row, label.text
+    row:ClearAllPoints()
+    text:ClearAllPoints()
+    if container then
+        row:SetPoint("TOP", container, "TOP")
+        row:SetPoint("BOTTOM", container, "BOTTOM")
+        row:SetPoint("LEFT", label, "LEFT")
+        row:SetPoint("RIGHT", label, "RIGHT")
+        local onlyName = frame.IsShowOnlyName and frame:IsShowOnlyName()
+        if onlyName then
+            -- Blizzard's "show only name" mode: the name sits where the bar would be.
+            text:SetPoint("CENTER", row, "CENTER", 0, 0)
+        else
+            text:SetPoint("BOTTOM", row, "TOP", 0, 2)
+        end
+    else
+        text:SetPoint("CENTER", label, "CENTER", 0, 0)
+    end
+end
+
+-- The name exactly as Blizzard writes it on the plate (with a surname, if the
+-- game shows those), or the unit's name until the plate has filled in.
+local function NameText(record, unit)
+    local blizzardName = record.name
+    local text = blizzardName and blizzardName:GetText()
+    if not Readable(text) then return text end  -- a secret name still draws fine
+    if text and text ~= "" then return text end
+    return UnitName(unit)
+end
+
+local function StyleLabel(record, unit)
     local db = ns.db.names
     local c = db.color
-    local name = UnitName(unit)
-    label.text:SetFont(ns.FONT, db.size, "THICKOUTLINE")
+    local label = GetLabel(record.frame)
+    PlaceLabel(label, record.frame)
+    ns.SetBigFont(label.text, db.size)
     label.text:SetTextColor(c.r, c.g, c.b)
-    label.text:SetText(name)
+    label.text:SetText(NameText(record, unit))
     local markerSize = math.floor(db.size * 1.2 + 0.5)
     label.marker:SetSize(markerSize, markerSize)
     label.marker:SetVertexColor(c.r, c.g, c.b)
@@ -77,46 +116,104 @@ local function StyleLabel(label, unit)
     label:Show()
 end
 
-function Names:UpdatePlate(plate, unit)
-    if plate.IsForbidden and plate:IsForbidden() then return end
-    local db = ns.db.names
+local function HideLabel(record)
+    local label = labels[record.frame]
+    if label then label:Hide() end
+end
 
-    local kind
-    if db.enabled then
-        local ok, result = pcall(Classify, unit)
-        -- The game sometimes hides who a plate belongs to (for example in
-        -- combat in newer versions). Leave the plate as it is until it can tell.
-        if not ok then return end
-        kind = result
-    end
-
-    if kind == "member" then
-        SetGamePlateHidden(plate, true)
-        if not pcall(StyleLabel, GetLabel(plate), unit) then
-            HideLabel(plate)
-            SetGamePlateHidden(plate, false)
-        end
-    else
-        HideLabel(plate)
-        SetGamePlateHidden(plate, kind == "other" and db.hideOthers)
+---------------------------------------------------------------------------
+-- Blizzard's parts: hidden with alpha and put back exactly as they were
+---------------------------------------------------------------------------
+local function SetNameHidden(record, hide)
+    local name = record.name
+    if not name then return end
+    if hide then
+        name:SetAlpha(0)
+        record.nameHidden = true
+    elseif record.nameHidden then
+        name:SetAlpha(1)
+        record.nameHidden = nil
     end
 end
 
-function Names:ReleasePlate(plate)
-    HideLabel(plate)
-    if not (plate.IsForbidden and plate:IsForbidden()) then
-        pcall(SetGamePlateHidden, plate, false)
+local function SetPlateHidden(record, hide)
+    if hide then
+        record.frame:SetAlpha(0)
+        record.plateHidden = true
+    elseif record.plateHidden then
+        record.frame:SetAlpha(1)
+        record.plateHidden = nil
     end
-    hidden[plate] = nil
-    plateUnits[plate] = nil
+end
+
+local function Restore(record)
+    HideLabel(record)
+    SetNameHidden(record, false)
+    SetPlateHidden(record, false)
+end
+
+---------------------------------------------------------------------------
+-- Public
+---------------------------------------------------------------------------
+function Names:Update(unit)
+    local record = records[unit]
+    if not record then return end
+    local db = ns.db.names
+    if not db.enabled then
+        Restore(record)
+        return
+    end
+
+    local ok, kind = pcall(Classify, unit)
+    -- Can't tell who this is right now: leave the plate as it is.
+    if not ok or kind == nil then return end
+
+    if kind == "member" then
+        SetPlateHidden(record, false)
+        if pcall(StyleLabel, record, unit) then
+            SetNameHidden(record, true)
+        else
+            Restore(record)
+        end
+    else
+        HideLabel(record)
+        SetNameHidden(record, false)
+        SetPlateHidden(record, kind == "other" and db.hideOthers)
+    end
+end
+
+-- Whether another unit's record is using this plate (plates are pooled).
+local function InUseElsewhere(frame, exceptUnit)
+    for unit, record in pairs(records) do
+        if unit ~= exceptUnit and record.frame == frame then return true end
+    end
+    return false
+end
+
+function Names:Remove(unit)
+    local record = records[unit]
+    if not record then return end
+    records[unit] = nil
+    if not InUseElsewhere(record.frame, unit) then Restore(record) end
+end
+
+function Names:Add(unit)
+    local frame = UnitFrameFor(unit)
+    if not frame then return end
+    local old = records[unit]
+    if not (old and old.frame == frame) then
+        if old then self:Remove(unit) end
+        records[unit] = { frame = frame, name = frame.name or frame.Name }
+    end
+    self:Update(unit)
 end
 
 function Names:RefreshAll()
-    for plate, unit in pairs(plateUnits) do
-        if GetNamePlateForUnit(unit) == plate then
-            self:UpdatePlate(plate, unit)
+    for unit, record in pairs(records) do
+        if UnitFrameFor(unit) == record.frame then
+            self:Update(unit)
         else
-            self:ReleasePlate(plate)
+            self:Remove(unit)
         end
     end
 end
@@ -129,19 +226,16 @@ function Names:Init()
     f:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
     f:SetScript("OnEvent", function(_, event, unit)
         if event == "NAME_PLATE_UNIT_ADDED" then
-            local plate = GetNamePlateForUnit(unit)
-            if plate then
-                plateUnits[plate] = unit
-                Names:UpdatePlate(plate, unit)
-            end
+            Names:Add(unit)
+            -- On Forever a plate can arrive before its unit is filled in; look again shortly.
+            C_Timer.After(0.1, function()
+                if records[unit] then Names:Update(unit) end
+            end)
         else
-            for plate, plateUnit in pairs(plateUnits) do
-                if plateUnit == unit then Names:ReleasePlate(plate) end
-            end
+            Names:Remove(unit)
         end
     end)
 
-    -- Re-check now and then: people join/leave, names load late, and the
-    -- game sometimes resets a plate's look on its own.
+    -- Re-check now and then: people join and leave, and names load late.
     C_Timer.NewTicker(0.5, function() Names:RefreshAll() end)
 end

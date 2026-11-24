@@ -87,6 +87,8 @@ function W:EnableMouse(e) self._mouse = e end
 function W:StartMoving() self._moving = true end
 function W:StopMovingOrSizing() self._moving = false end
 function W:Raise() self._raised = (self._raised or 0) + 1 end
+function W:GetFrameLevel() return self._level or 1 end
+function W:SetFrameLevel(l) self._level = l end
 function W:Click() if self._kind == "CheckButton" then self._checked = not self._checked end; if self._scripts.OnClick then self._scripts.OnClick(self, "LeftButton") end end
 
 function CreateFrame(kind, name, parent, template)
@@ -247,16 +249,32 @@ C_NamePlate = {
     end,
 }
 
+-- Minimap, tooltip, cursor, and Blizzard's Edit Mode (announced through EventRegistry)
+Minimap = newObj("Frame"); Minimap._w = 198; Minimap._level = 2
+function Minimap:GetCenter() return 1700, 900 end
+local cursor = { 1700, 1100 }
+function GetCursorPosition() return cursor[1], cursor[2] end
+GameTooltip = newObj("Frame"); GameTooltip._lines = {}
+function GameTooltip:SetOwner(o) self._owner = o; self._lines = {} end
+function GameTooltip:IsOwned(o) return self._owner == o end
+function GameTooltip:AddLine(t) self._lines[#self._lines + 1] = t end
+local editModeCallbacks = {}
+EventRegistry = { RegisterCallback = function(_, event, fn, owner) editModeCallbacks[event] = function() fn(owner) end end }
+
 ---------------------------------------------------------------- helpers
 local passed, failed = 0, 0
 local function check(cond, label)
     if cond then passed = passed + 1 else failed = failed + 1; realPrint("FAIL: " .. label) end
 end
 local function near(a, b) return type(a) == "number" and math.abs(a - b) < 1e-6 end
+local function isTeal(r, g, b)
+    if type(r) == "table" then r, g, b = r[1] or r.r, r[2] or r.g, r[3] or r.b end
+    return near(r, 0) and near(g, 0.85) and near(b, 0.8)
+end
 
 ---------------------------------------------------------------- load addon
 local ns = {}
-for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua" }) do
+for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua" }) do
     local chunk = assert(loadfile(ADDON_DIR .. "/" .. file))
     chunk("FindMyParty", ns)
 end
@@ -265,6 +283,10 @@ FireEvent("ADDON_LOADED", "SomethingElse")
 check(ns.db == nil, "ignores other addons' ADDON_LOADED")
 FireEvent("ADDON_LOADED", "FindMyParty")
 check(FindMyPartyDB and FindMyPartyDB.names.size == 20, "defaults applied")
+check(isTeal(FindMyPartyDB.names.color), "default color is teal")
+check(FindMyPartyDB.names.hideOthers == false, "other people's plates are not hidden by default")
+check(FindMyPartyDB.names.markerSize == 24 and FindMyPartyDB.arrows.unlocked == false, "head arrow size and lock defaults")
+check(FindMyPartyDB.version == 2, "fresh install marked as current settings version")
 check(registeredCategory and registeredCategory.name == "Find My Party", "settings page registered")
 
 FireEvent("PLAYER_LOGIN")
@@ -307,10 +329,11 @@ check(l1 and l1:IsShown() and l1.text:GetText() == "Grandpa Oakheart", "label co
 check(uf1.name:GetAlpha() == 0, "only Blizzard's name text is hidden")
 check(uf1:GetAlpha() == 1 and uf1.HealthBarsContainer:GetAlpha() == 1, "party member's health bar and plate stay visible")
 check(l1 and l1.text._fontObject == SystemFont_OutlineThick_Huge2 and l1.text._fontHeight == 20, "label uses outlined multi-alphabet font at chosen size")
-check(l1 and near(l1.text._color[1], 1) and near(l1.text._color[3], 0.85), "label uses chosen color")
+check(l1 and isTeal(l1.text._color), "label uses chosen color (teal)")
+check(l1 and l1.marker._w == 24 and l1.marker._h == 24, "head arrow uses its own size setting")
 check(l1 and near(l1.marker._rot, PI) and l1.marker:IsShown(), "marker points down")
 check(l1 and l1.text._points[1][1] == "BOTTOM" and l1.text._points[1][3] == "TOP", "name drawn just above the health bar")
-check(p2.UnitFrame:GetAlpha() == 0, "stranger's plate hidden (hideOthers)")
+check(p2.UnitFrame:GetAlpha() == 1, "stranger's plate left alone by default")
 check(labelOf(p2.UnitFrame) == nil, "stranger gets no label")
 check(p3.UnitFrame:GetAlpha() == 1, "enemy plate untouched")
 check(p4.UnitFrame:GetAlpha() == 1, "plate whose group membership is secret is left alone")
@@ -324,14 +347,20 @@ check(l1.text._points[1][1] == "CENTER", "name-only mode centers the name")
 uf1.showOnlyName = false
 Tick()
 
+ns.db.names.hideOthers = true
+ns.RefreshAll()
+check(p2.UnitFrame:GetAlpha() == 0 and labelOf(p2.UnitFrame) == nil, "stranger plate hidden when hideOthers on")
 ns.db.names.hideOthers = false
 ns.RefreshAll()
 check(p2.UnitFrame:GetAlpha() == 1, "stranger plate restored when hideOthers off")
 
 ns.db.names.size = 32
-ns.db.names.marker = false
+ns.db.names.markerSize = 40
 Tick()
 check(l1.text._fontHeight == 32, "ticker restyles size")
+check(l1.marker._w == 40, "head arrow resizes on its own")
+ns.db.names.marker = false
+Tick()
 check(not l1.marker:IsShown(), "marker can be hidden")
 
 ns.db.names.enabled = false
@@ -442,7 +471,7 @@ check(w1.info:GetText() == "Offline", "offline message")
 state.party[1].online = true
 update()
 check(w1.arrow:IsShown(), "arrow returns")
-check(near(w1.arrow._vcolor[1], 1) and near(w1.arrow._vcolor[3], 0.85), "arrow tinted with name color")
+check(isTeal(w1.arrow._vcolor), "arrow tinted with name color")
 
 -- names hidden by the game mid-combat: arrows stay as they were
 state.secretNames = true
@@ -477,7 +506,13 @@ check(ns.db.arrows.targets["Bob"] == true, "ticking Bob saves him")
 update()
 local w2 = widget(2)
 check(w2 and w2.name:GetText() == "Bob", "second arrow for Bob")
-check(w1._mouse == true, "arrows draggable while window open")
+check(w1._mouse == false, "arrows stay locked while the window is open")
+local unlockBox
+for _, f in ipairs(allFrames) do if f._kind == "CheckButton" and f.label and tostring(f.label:GetText()):find("Unlock the arrows") then unlockBox = f end end
+unlockBox:Click()
+check(ns.db.arrows.unlocked and w1._mouse == true and container.editBackground:IsShown(), "unlock checkbox makes arrows draggable")
+unlockBox:Click()
+check(not ns.db.arrows.unlocked and w1._mouse == false and not container.editBackground:IsShown(), "unticking locks them again")
 
 table.remove(state.party, 2)
 state.plates.nameplate5 = nil
@@ -491,18 +526,22 @@ check(#rows() == 1, "row removed")
 
 local sliders = {}
 for _, f in ipairs(allFrames) do if f._kind == "Slider" then sliders[#sliders + 1] = f end end
-check(#sliders == 2, "two sliders")
+check(#sliders == 3, "three sliders")
 sliders[1]:SetValue(27.4)
 check(ns.db.names.size == 27, "size slider rounds and saves: " .. ns.db.names.size)
-sliders[2]:SetValue(1.53)
+sliders[2]:SetValue(51)
+check(ns.db.names.markerSize == 52, "head arrow slider saves in steps of 2: " .. ns.db.names.markerSize)
+sliders[3]:SetValue(1.53)
 check(near(ns.db.arrows.scale, 1.5), "arrow slider saves: " .. ns.db.arrows.scale)
 check(container:GetScale() == ns.db.arrows.scale, "arrow scale applied")
 
 local swatches = {}
 for _, f in ipairs(allFrames) do if f._kind == "Button" and f.color and f._parent == opts then swatches[#swatches + 1] = f end end
 check(#swatches == 8, "1 current + 7 preset swatches, got " .. #swatches)
-swatches[3]:Click()
-check(near(ns.db.names.color.g, 0.5), "preset sets color")
+swatches[2]:Click()
+check(isTeal(ns.db.names.color), "first preset is teal")
+swatches[4]:Click()
+check(near(ns.db.names.color.g, 0.5), "preset sets color (orange)")
 swatches[1]:Click()
 check(pickerInfo and pickerInfo.swatchFunc and pickerInfo.hasOpacity == false, "color picker opened with Forever's SetupColorPickerAndShow")
 pickerInfo.swatchFunc()
@@ -523,11 +562,26 @@ check(state.cvars.nameplateShowFriendlyPlayers == "1" and friendlyBox:GetChecked
 state.combat = false
 
 w1._scripts.OnDragStart(w1)
-check(container._moving, "drag starts while window open")
+check(not container._moving, "locked arrows can't be dragged")
+local mmb = FindMyPartyMinimapButton
+check(mmb and mmb._shown, "minimap button exists and shows")
+mmb._scripts.OnClick(mmb, "RightButton")
+check(ns.db.arrows.unlocked and w1._mouse == true, "minimap right-click unlocks the arrows")
+check(unlockBox:GetChecked(), "window checkbox follows the minimap button")
+w1._scripts.OnDragStart(w1)
+check(container._moving, "drag starts while unlocked")
+mmb._scripts.OnClick(mmb, "RightButton")
+check(not ns.db.arrows.unlocked and not container._moving and w1._mouse == false, "minimap right-click locks and ends a drag")
 opts:Hide()
-check(not container._moving, "closing the window ends a drag")
-check(w1._mouse == false, "arrows click-through once window closed")
 check(container:IsShown(), "arrows stay up after closing window")
+
+-- Blizzard's Edit Mode
+editModeCallbacks["EditMode.Enter"]()
+check(w1._mouse == true and container.editBackground:IsShown(), "Edit Mode makes the arrows draggable")
+w1._scripts.OnDragStart(w1)
+check(container._moving, "drag starts in Edit Mode")
+editModeCallbacks["EditMode.Exit"]()
+check(not container._moving and w1._mouse == false and not ns.db.arrows.unlocked, "leaving Edit Mode locks them again")
 
 SlashCmdList.FINDMYPARTY("reset")
 check(ns.db.arrows.x == 0 and ns.db.arrows.y == 150, "reset position")
@@ -535,10 +589,41 @@ check(ns.db.arrows.x == 0 and ns.db.arrows.y == 150, "reset position")
 wipe(ns.db.arrows.targets)
 ns.RefreshAll()
 check(not container:IsShown(), "hidden when nobody is picked")
+SlashCmdList.FINDMYPARTY("unlock")
+check(container:IsShown(), "placeholder shown while unlocked so it can be placed")
+editModeCallbacks["EditMode.Enter"]()
+SlashCmdList.FINDMYPARTY("lock")
+check(container:IsShown(), "placeholder still shown in Edit Mode")
+editModeCallbacks["EditMode.Exit"]()
+check(not container:IsShown(), "placeholder gone once locked and out of Edit Mode")
 SlashCmdList.FINDMYPARTY("")
-check(container:IsShown(), "placeholder shown while setting up")
 FindMyParty_OnAddonCompartmentClick()
 check(not opts:IsShown(), "compartment click toggles window")
+
+-- minimap button: left-click, tooltip, drag around the edge, hide option
+mmb:Click()
+check(opts:IsShown(), "minimap left-click opens the settings")
+mmb:Click()
+check(not opts:IsShown(), "minimap left-click closes them again")
+mmb._scripts.OnEnter(mmb)
+check(GameTooltip._lines[1] == "Find My Party" and tostring(GameTooltip._lines[3]):find("unlock"), "minimap tooltip explains the clicks")
+cursor[1], cursor[2] = 1700, 1100   -- straight above the minimap's center
+mmb._scripts.OnDragStart(mmb)
+mmb._scripts.OnUpdate(mmb)
+mmb._scripts.OnDragStop(mmb)
+check(ns.db.minimap.angle == 90, "dragging moves the button around the edge: " .. tostring(ns.db.minimap.angle))
+local pt = mmb._points[#mmb._points]
+check(pt[2] == Minimap and math.abs(pt[4]) < 1e-9 and near(pt[5], 109), "button sits just outside the minimap's edge")
+check(mmb._scripts.OnUpdate == nil, "drag stops following the cursor")
+SlashCmdList.FINDMYPARTY("")
+local mmBox
+for _, f in ipairs(allFrames) do if f._kind == "CheckButton" and f.label and tostring(f.label:GetText()):find("minimap button") then mmBox = f end end
+check(mmBox and mmBox:GetChecked(), "show minimap button ticked by default")
+mmBox:Click()
+check(ns.db.minimap.hide and not mmb._shown, "unticking hides the minimap button")
+mmBox:Click()
+check(not ns.db.minimap.hide and mmb._shown, "ticking shows it again")
+opts:Hide()
 
 state.party = {}
 FireEvent("GROUP_ROSTER_UPDATE"); RunTimers()
@@ -552,6 +637,23 @@ for _, f in ipairs(allFrames) do if f._kind == "Button" and f._template == "UIPa
 check(openButton ~= nil, "settings page has an open button")
 openButton:Click()
 check(opts:IsShown(), "settings page button opens the window")
+
+---------------------------------------------------------------- settings saved by version 1.1
+local function loadWith(saved)
+    FindMyPartyDB = saved
+    local ns2 = {}
+    for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua" }) do
+        assert(loadfile(ADDON_DIR .. "/" .. file))("FindMyParty", ns2)
+    end
+    FireEvent("ADDON_LOADED", "FindMyParty")
+    return ns2.db
+end
+local old = loadWith({ names = { color = { r = 1, g = 0.25, b = 0.85 }, hideOthers = true, size = 30 }, arrows = { targets = { Grandpa = true } } })
+check(isTeal(old.names.color), "old pink default becomes teal")
+check(old.names.hideOthers == false and old.names.size == 30 and old.arrows.targets.Grandpa, "old defaults updated, own choices kept")
+check(old.version == 2 and old.names.markerSize == 24, "new settings added to old saved settings")
+local custom = loadWith({ names = { color = { r = 1, g = 0.5, b = 0 } } })
+check(near(custom.names.color.g, 0.5), "a color picked on purpose is kept")
 
 realPrint(("%d passed, %d failed"):format(passed, failed))
 for _, m in ipairs(printed) do realPrint("  chat: " .. m) end

@@ -3,23 +3,48 @@ local ADDON_NAME, ns = ...
 
 ns.TITLE = "Find My Party"
 ns.ARROW_TEXTURE = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\Arrow"
+ns.ICON_TEXTURE = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\MinimapIcon"
+
+local SETTINGS_VERSION = 2
 
 ns.defaults = {
     names = {
         enabled = true,                          -- color the names over party members' heads
-        color = { r = 1, g = 0.25, b = 0.85 },   -- hot pink: nothing else in the game uses it
+        color = { r = 0, g = 0.85, b = 0.8 },    -- bright teal
         size = 20,                               -- font size of the name
         marker = true,                           -- small arrow above the name pointing down at them
-        hideOthers = true,                       -- hide everyone else's friendly name plates
+        markerSize = 24,                         -- size of that arrow
+        hideOthers = false,                      -- hide everyone else's friendly name plates
     },
     arrows = {
         enabled = true,
         scale = 1,
-        x = 0,           -- arrow position, offset from the middle of the screen
+        unlocked = false, -- true while the arrows can be dragged around
+        x = 0,            -- arrow position, offset from the middle of the screen
         y = 150,
-        targets = {},    -- [name] = true for each person to point at
+        targets = {},     -- [name] = true for each person to point at
+    },
+    minimap = {
+        hide = false,     -- the minimap button
+        angle = 200,      -- where it sits around the minimap, in degrees
     },
 }
+
+-- Settings saved by an older version. Version 1 started with pink names and
+-- everyone else's name plates hidden; anyone still on those old defaults moves
+-- to the new ones, and anything picked on purpose is kept.
+local function Migrate(db)
+    if (db.version or 1) < 2 then
+        local c = db.names.color
+        local function near(a, b) return math.abs(a - b) < 0.001 end
+        if near(c.r, 1) and near(c.g, 0.25) and near(c.b, 0.85) then
+            local teal = ns.defaults.names.color
+            c.r, c.g, c.b = teal.r, teal.g, teal.b
+        end
+        db.names.hideOthers = false
+    end
+    db.version = SETTINGS_VERSION
+end
 
 local function CopyDefaults(src, dst)
     for k, v in pairs(src) do
@@ -34,7 +59,7 @@ local function CopyDefaults(src, dst)
 end
 
 function ns.Print(msg)
-    print("|cffff40d9" .. ns.TITLE .. ":|r " .. msg)
+    print("|cff00d9cc" .. ns.TITLE .. ":|r " .. msg)
 end
 
 ---------------------------------------------------------------------------
@@ -133,6 +158,18 @@ function ns.RefreshAll()
     ns.Names:RefreshAll()
     ns.Arrows:Rebuild()
     ns.Options:Refresh()
+    ns.MinimapButton:Refresh()
+end
+
+-- Unlocked arrows can be dragged around the screen; locked ones let clicks through.
+function ns.SetArrowsUnlocked(unlocked)
+    ns.db.arrows.unlocked = unlocked and true or false
+    ns.RefreshAll()
+    if unlocked then
+        ns.Print("Arrows unlocked: drag them where you want them, then lock them again.")
+    else
+        ns.Print("Arrows locked in place.")
+    end
 end
 
 -- Roster events come in bursts; handle them once.
@@ -156,12 +193,19 @@ events:SetScript("OnEvent", function(self, event, arg1)
         if arg1 ~= ADDON_NAME then return end
         self:UnregisterEvent("ADDON_LOADED")
 
+        local firstRun = FindMyPartyDB == nil
         FindMyPartyDB = CopyDefaults(ns.defaults, FindMyPartyDB or {})
         ns.db = FindMyPartyDB
+        if firstRun then
+            ns.db.version = SETTINGS_VERSION
+        else
+            Migrate(ns.db)
+        end
 
         ns.Names:Init()
         ns.Arrows:Init()
         ns.Options:Init()
+        ns.MinimapButton:Init()
 
         self:RegisterEvent("PLAYER_LOGIN")
         self:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -202,6 +246,10 @@ SlashCmdList.FINDMYPARTY = function(msg)
     if msg == "reset" then
         ns.Arrows:ResetPosition()
         ns.Print("Arrow moved back to the middle of the screen.")
+    elseif msg == "unlock" or msg == "move" then
+        ns.SetArrowsUnlocked(true)
+    elseif msg == "lock" then
+        ns.SetArrowsUnlocked(false)
     else
         ns.Options:Toggle()
     end

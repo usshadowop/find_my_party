@@ -2,11 +2,12 @@
 
 A **WoW: Forever** addon for party members who lose track of the group in crowds.
 
-- **Colored names over party members' heads.** Pick any color and size, and your party's names stand out instead of blending in. The addon draws the name right over the game's own (the health bar stays), with a small arrow above it pointing down at them.
-- **Hide everyone else's name plates.** In a busy city only your party's names show. You can turn this off.
-- **Arrows that point to people.** Tick a party member's name and an on-screen arrow points their way, with how many yards off they are. Tick several people to get several arrows.
+- **Colored names over party members' heads.** Teal to start with, or any color and size you like, so your party's names stand out instead of blending in. The addon draws the name right over the game's own (the health bar stays), with a small arrow above it pointing down at them. That arrow has its own size setting.
+- **Hide everyone else's name plates (optional).** Off at first. Turn it on and in a busy city only your party's names show.
+- **Arrows that point to people.** Tick a party member's name and an on-screen arrow points their way, with how many yards off they are. Tick several people to get several arrows. Move them by unlocking them, or in the game's Edit Mode.
+- **A minimap button** (yellow party silhouettes) that opens the settings.
 
-Everything is set from one window, opened with `/fmp`.
+Everything is set from one window: click the minimap button or type `/fmp`.
 
 ## Installing
 
@@ -18,17 +19,23 @@ Everything is set from one window, opened with `/fmp`.
 
 ## Using it
 
-Type **`/fmp`**. You can also click it in the AddOns menu under the minimap, or go to **Options → AddOns → Find My Party**.
+Click the **minimap button** (yellow party silhouettes) or type **`/fmp`**. It's also in the AddOns menu under the minimap, and under **Options → AddOns → Find My Party**.
+
+**The minimap button**
+- **Left-click** opens or closes the settings.
+- **Right-click** unlocks the arrows so you can move them, and right-click again to lock them.
+- **Drag** it to move it around the edge of the minimap. Untick **Show minimap button** in the settings to hide it.
 
 **Left side: names**
 - Click a colored square, or **Pick any color...** for any color you like.
 - Drag **Name size** to make names bigger.
+- Drag **Size of the arrow above their heads** to make that arrow bigger or smaller.
 - The preview box shows what the names will look like.
 
 **Right side: arrows**
 - Everyone in your group is listed. Tick the people you want an arrow for. The addon remembers who you ticked, so the arrow comes back when that person joins your group again.
-- Drag the arrows to wherever you like on the screen while the window is open. When the window closes they lock in place and your clicks go through them.
-- `/fmp reset` puts the arrow back in the middle of the screen.
+- **Moving the arrows:** tick **Unlock the arrows so I can drag them** (or right-click the minimap button), drag them where you like, then untick it to lock them. While locked, your clicks go straight through them. They can also be moved in the game's **Edit Mode** (Esc → Edit Mode): they get a blue box there like the game's own frames, and lock again when you leave.
+- `/fmp unlock` and `/fmp lock` do the same, and `/fmp reset` puts the arrows back in the middle of the screen.
 
 The arrow points relative to the direction **your character** is facing: up means straight ahead. It also shows the distance in yards.
 
@@ -39,6 +46,7 @@ The arrow points relative to the direction **your character** is facing: up mean
 - Name plates only appear for people within about 45 yards (Forever's default), so the arrow is what finds people who are further away.
 - During combat the game sometimes hides who a name plate belongs to. The addon then leaves that plate alone until it can tell again.
 - With another name plate addon the colored names still appear, but hiding other people's plates may not.
+- The arrows' position is saved by the addon, not in your Edit Mode layout: the game doesn't let addons add frames to its layouts.
 
 ## Tip
 
@@ -61,5 +69,5 @@ It doesn't automate anything: no moving, targeting, casting or clicking for you.
   - The friendly plates CVar is `nameplateShowFriendlyPlayers`.
   - `UnitName`'s second value is a surname, not a realm.
   - Check for secret values before testing them.
-- `tools/make_arrow.py` regenerates `FindMyParty/Media/Arrow.tga` (a white arrow that the addon tints).
+- `tools/make_arrow.py` regenerates `FindMyParty/Media/Arrow.tga` (a white arrow that the addon tints), and `tools/make_icon.py` the minimap icon `FindMyParty/Media/MinimapIcon.tga`.
 - `tests/harness.lua` runs the addon against a small fake Forever client and checks the name plate logic, arrow math and settings window: `lua5.1 tests/harness.lua FindMyParty`.

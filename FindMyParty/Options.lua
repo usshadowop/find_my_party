@@ -10,12 +10,12 @@ local LEFT, RIGHT = 24, 350          -- x position of the two columns
 local COLUMN_WIDTH = 290
 
 local PRESETS = {
+    { 0.00, 0.85, 0.80 }, -- teal (the default)
     { 1.00, 0.25, 0.85 }, -- pink
     { 1.00, 0.50, 0.00 }, -- orange
     { 1.00, 0.95, 0.10 }, -- yellow
     { 1.00, 0.15, 0.15 }, -- red
     { 0.70, 0.35, 1.00 }, -- purple
-    { 0.10, 1.00, 1.00 }, -- cyan
     { 1.00, 1.00, 1.00 }, -- white
 }
 
@@ -242,7 +242,7 @@ end
 ---------------------------------------------------------------------------
 local function CreateWindow()
     frame = CreateFrame("Frame", "FindMyPartyOptions", UIParent, BACKDROP_TEMPLATE)
-    frame:SetSize(660, 470)
+    frame:SetSize(660, 520)
     frame:SetPoint("CENTER")
     -- HIGH, like Blizzard's Settings window, so the color picker (DIALOG) opens on top.
     frame:SetFrameStrata("HIGH")
@@ -273,7 +273,7 @@ local function CreateWindow()
 
     local divider = frame:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(1, 1, 1, 0.15)
-    divider:SetSize(1, 390)
+    divider:SetSize(1, 440)
     divider:SetPoint("TOP", frame, "TOPLEFT", 330, -50)
 
     local function Place(widget, x, y)
@@ -315,26 +315,34 @@ local function CreateWindow()
     ui.marker = Place(CheckBox(frame, "Show an arrow above their names", function(checked)
         ns.db.names.marker = checked
         ns.RefreshAll()
-    end), LEFT, -236)
+    end), LEFT, -234)
+
+    ui.markerSlider = Place(Slider(frame, "Size of the arrow above their heads", 10, 80, 2,
+        function(v) return tostring(v) end,
+        function(v)
+            ns.db.names.markerSize = v
+            ns.RefreshAll()
+        end), LEFT + 4, -284)
 
     ui.hideOthers = Place(CheckBox(frame, "Hide everyone else's name plates", function(checked)
         ns.db.names.hideOthers = checked
         ns.RefreshAll()
-    end), LEFT, -262)
+    end), LEFT, -312)
 
     ui.friendly = Place(CheckBox(frame, "Friendly name plates on (needed)", function(checked)
         ns.SetFriendlyPlates(checked)
         ns.RefreshAll()
-    end), LEFT, -288)
+    end), LEFT, -338)
 
     local hint = Place(Text(frame, "GameFontDisableSmall",
         "They can also be turned on in the game's Options, under Nameplates. The game "
-        .. "doesn't let addons change name plates inside dungeons and raids."), LEFT + 4, -318)
+        .. "doesn't let addons change name plates inside dungeons and raids."), LEFT + 4, -366)
     hint:SetWidth(COLUMN_WIDTH - 8)
 
     -- Preview of what the name will look like
-    local preview = Place(CreateFrame("Frame", nil, frame), LEFT, -350)
-    preview:SetSize(COLUMN_WIDTH, 96)
+    local preview = Place(CreateFrame("Frame", nil, frame), LEFT, -398)
+    preview:SetSize(COLUMN_WIDTH, 104)
+    if preview.SetClipsChildren then preview:SetClipsChildren(true) end
     local previewBg = preview:CreateTexture(nil, "BACKGROUND")
     previewBg:SetAllPoints()
     previewBg:SetColorTexture(0.16, 0.22, 0.16, 1)
@@ -360,7 +368,7 @@ local function CreateWindow()
     Place(Text(frame, "GameFontHighlight", "Point an arrow at:"), RIGHT + 4, -108)
 
     local listBox = Place(CreateFrame("Frame", nil, frame), RIGHT, -126)
-    listBox:SetSize(COLUMN_WIDTH - 10, 200)
+    listBox:SetSize(COLUMN_WIDTH - 10, 170)
     local listBg = listBox:CreateTexture(nil, "BACKGROUND")
     listBg:SetAllPoints()
     listBg:SetColorTexture(0, 0, 0, 0.35)
@@ -387,24 +395,33 @@ local function CreateWindow()
     ui.moreText = Text(frame, "GameFontDisableSmall", "Scroll for more")
     ui.moreText:SetPoint("TOPRIGHT", listBox, "BOTTOMRIGHT", 0, -3)
 
-    ui.arrowSlider = Place(Slider(frame, "Arrow size", 0.5, 2.5, 0.1,
+    ui.arrowSlider = Place(Slider(frame, "Screen arrow size", 0.5, 2.5, 0.1,
         function(v) return math.floor(v * 100 + 0.5) .. "%" end,
         function(v)
             ns.db.arrows.scale = v
             ns.Arrows:ApplyPosition()
-        end), RIGHT + 4, -366)
+        end), RIGHT + 4, -336)
+
+    ui.unlocked = Place(CheckBox(frame, "Unlock the arrows so I can drag them", function(checked)
+        ns.SetArrowsUnlocked(checked)
+    end), RIGHT, -364)
 
     local dragHint = Place(Text(frame, "GameFontDisableSmall",
-        "While this window is open you can drag the arrows to move them."), RIGHT + 4, -394)
+        "Untick to lock them in place. They can also be moved in the game's Edit Mode, "
+        .. "and right-clicking the minimap button locks or unlocks them."), RIGHT + 4, -392)
     dragHint:SetWidth(COLUMN_WIDTH - 8)
 
     Place(Button(frame, "Reset arrow position", 170, function()
         ns.Arrows:ResetPosition()
-    end), RIGHT, -418)
+    end), RIGHT, -424)
+
+    ui.minimap = Place(CheckBox(frame, "Show minimap button", function(checked)
+        ns.db.minimap.hide = not checked
+        ns.RefreshAll()
+    end), RIGHT, -462)
 
     -------------------------------------------------------------------
     frame:SetScript("OnShow", function() ns.RefreshAll() end)
-    frame:SetScript("OnHide", function() ns.Arrows:Rebuild() end)
     frame:RegisterEvent("CVAR_UPDATE")
     frame:SetScript("OnEvent", function() Options:Refresh() end)
 end
@@ -432,13 +449,15 @@ function Options:Refresh()
     ns.SetBigFont(ui.previewText, names.size)
     ui.previewText:SetTextColor(c.r, c.g, c.b)
     ui.previewText:SetText("Party Member")
-    local markerSize = math.floor(names.size * 1.2 + 0.5)
-    ui.previewMarker:SetSize(markerSize, markerSize)
+    ui.markerSlider:SetDisplayedValue(names.markerSize)
+    ui.previewMarker:SetSize(names.markerSize, names.markerSize)
     ui.previewMarker:SetVertexColor(c.r, c.g, c.b)
     ui.previewMarker:SetShown(names.marker)
 
     ui.arrowsEnabled:SetChecked(arrows.enabled)
     ui.arrowSlider:SetDisplayedValue(arrows.scale)
+    ui.unlocked:SetChecked(arrows.unlocked)
+    ui.minimap:SetChecked(not ns.db.minimap.hide)
     RefreshMembers()
 end
 

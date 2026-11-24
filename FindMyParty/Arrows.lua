@@ -92,8 +92,16 @@ end
 ---------------------------------------------------------------------------
 -- Arrow frames
 ---------------------------------------------------------------------------
+-- Blizzard's Edit Mode (Esc > Edit Mode) is open.
+local editModeActive = false
+
+-- The arrows can be dragged while unlocked in our settings, or while Edit Mode is open.
+local function Movable()
+    return ns.db.arrows.unlocked or editModeActive
+end
+
 local function StartMove()
-    if ns.Options:IsShown() then
+    if Movable() then
         moving = true
         container:StartMoving()
     end
@@ -207,7 +215,7 @@ end
 function Arrows:Rebuild()
     local db = ns.db.arrows
     local c = ns.db.names.color
-    local editing = ns.Options:IsShown()
+    local editing = Movable()
     if moving and not editing then StopMove() end
 
     if not db.enabled then
@@ -243,8 +251,8 @@ function Arrows:Rebuild()
         widgets[i]:Hide()
     end
 
-    -- While the settings window is open the arrows can be dragged around;
-    -- if nobody is picked yet, show a sample arrow so there's something to drag.
+    -- While unlocked (or in Edit Mode) the arrows can be dragged around; if
+    -- nobody is picked yet, show a sample arrow so there's something to drag.
     placeholder.arrow:SetVertexColor(c.r, c.g, c.b)
     placeholder:EnableMouse(editing)
     placeholder:SetShown(editing and #tracked == 0)
@@ -268,8 +276,34 @@ function Arrows:Init()
 
     placeholder = CreateWidget()
     placeholder:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-    placeholder.name:SetText("Arrows go here")
+    placeholder.name:SetText("Find My Party arrows")
     placeholder.info:SetText("Drag to move")
 
     self:ApplyPosition()
+    self:WatchEditMode()
+end
+
+-- Blizzard's Edit Mode: while it's open the arrows show their blue box and can
+-- be dragged, like the game's own frames. Forever's Edit Mode announces itself
+-- through EventRegistry ("EditMode.Enter" / "EditMode.Exit"); if that isn't
+-- there, follow the Edit Mode window's own enter and exit functions instead.
+-- Only listening: nothing of Blizzard's is changed. The position is saved by
+-- this addon, not in an Edit Mode layout (addons can't add to those).
+local function SetEditMode(active)
+    editModeActive = active and true or false
+    pcall(Arrows.Rebuild, Arrows)
+end
+
+function Arrows:WatchEditMode()
+    if EventRegistry and EventRegistry.RegisterCallback then
+        EventRegistry:RegisterCallback("EditMode.Enter", function() SetEditMode(true) end, Arrows)
+        EventRegistry:RegisterCallback("EditMode.Exit", function() SetEditMode(false) end, Arrows)
+    elseif EditModeManagerFrame and hooksecurefunc then
+        hooksecurefunc(EditModeManagerFrame, "EnterEditMode", function() SetEditMode(true) end)
+        hooksecurefunc(EditModeManagerFrame, "ExitEditMode", function() SetEditMode(false) end)
+    end
+end
+
+function Arrows:InEditMode()
+    return editModeActive
 end

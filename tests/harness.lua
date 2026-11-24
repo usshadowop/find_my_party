@@ -259,6 +259,20 @@ function GameTooltip:SetOwner(o) self._owner = o; self._lines = {} end
 function GameTooltip:IsOwned(o) return self._owner == o end
 function GameTooltip:AddLine(t) self._lines[#self._lines + 1] = t end
 local editModeCallbacks = {}
+function hooksecurefunc(t, name, fn)
+    local orig = t[name]
+    t[name] = function(...) local r = orig(...); fn(...); return r end
+end
+-- Blizzard's party frames: PartyFrame.MemberFrame1-4, secure unit buttons from a pool
+PartyFrame = newObj("Frame")
+local function newMemberFrame(i)
+    local mf = newObj("Button", PartyFrame)
+    mf.layoutIndex, mf.unitToken, mf._level = i, "party" .. i, 5
+    PartyFrame["MemberFrame" .. i] = mf
+    return mf
+end
+for i = 1, 4 do newMemberFrame(i) end
+function PartyFrame:UpdatePartyFrames() self._updates = (self._updates or 0) + 1 end
 EventRegistry = { RegisterCallback = function(_, event, fn, owner) editModeCallbacks[event] = function() fn(owner) end end }
 
 ---------------------------------------------------------------- helpers
@@ -274,7 +288,7 @@ end
 
 ---------------------------------------------------------------- load addon
 local ns = {}
-for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua" }) do
+for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua", "PartyFrames.lua" }) do
     local chunk = assert(loadfile(ADDON_DIR .. "/" .. file))
     chunk("FindMyParty", ns)
 end
@@ -501,6 +515,59 @@ check(r[1].label:GetText() == "Grandpa" and r[1]:GetChecked(), "Grandpa row chec
 check(r[2].label:GetText() == "Bob" and not r[2]:GetChecked(), "Bob row unchecked")
 check(near(r[2].label._color[1], 0.78), "class colored name")
 
+-- arrow checkboxes on Blizzard's party frames
+local function boxOn(mf)
+    for _, f in ipairs(allFrames) do if f._parent == mf and f._kind == "CheckButton" then return f end end
+end
+local b1, b2, b3 = boxOn(PartyFrame.MemberFrame1), boxOn(PartyFrame.MemberFrame2), boxOn(PartyFrame.MemberFrame3)
+check(b1 and b2, "checkboxes made on the party frames")
+check(b1 and b1._shown and b1:GetChecked() and b1.name == "Grandpa", "Grandpa's party frame box is ticked")
+check(b2 and b2._shown and not b2:GetChecked(), "Bob's party frame box is unticked")
+check(b3 and not b3._shown, "no box on an empty party frame")
+check(b1._points[1][2] == PartyFrame.MemberFrame1 and b1._points[1][3] == "RIGHT", "box sits just right of its member frame")
+check(b1._level > PartyFrame.MemberFrame1._level, "box drawn above the frame")
+check(isTeal(b1.icon._vcolor), "box's arrow icon in the name color")
+b2:Click()
+check(ns.db.arrows.targets.Bob == true and rows()[2]:GetChecked(), "ticking a party frame box picks them, settings list follows")
+update()
+check(widget(2) and widget(2).name:GetText() == "Bob", "an arrow appears for them")
+b2:Click()
+check(ns.db.arrows.targets.Bob == nil and not rows()[2]:GetChecked(), "unticking the box stops it")
+update()
+check(widget(2) == nil, "their arrow goes away")
+rows()[1]:Click()
+check(not b1:GetChecked(), "party frame box follows the settings list")
+rows()[1]:Click()
+check(b1:GetChecked(), "and back again")
+b1._scripts.OnEnter(b1)
+check(tostring(GameTooltip._lines[2]):find("Grandpa"), "box tooltip names the party member")
+local pbBox
+for _, f in ipairs(allFrames) do if f._kind == "CheckButton" and f.label and tostring(f.label:GetText()):find("checkboxes on the party frames") then pbBox = f end end
+check(pbBox and pbBox:GetChecked(), "party frame checkboxes on by default")
+pbBox:Click()
+check(not ns.db.arrows.partyBoxes and not b1._shown and not b2._shown, "the option hides the boxes")
+pbBox:Click()
+check(b1._shown and b2._shown, "and shows them again")
+ns.db.arrows.enabled = false; ns.RefreshAll()
+check(not b1._shown, "no boxes while arrows are turned off")
+ns.db.arrows.enabled = true; ns.RefreshAll()
+-- Blizzard sets the frames up again with the members swapped round
+PartyFrame.MemberFrame1.unitToken, PartyFrame.MemberFrame2.unitToken = "party2", "party1"
+PartyFrame:UpdatePartyFrames()
+check(b1.name == "Bob" and not b1:GetChecked() and b2.name == "Grandpa" and b2:GetChecked(), "boxes follow Blizzard re-assigning its frames")
+PartyFrame.MemberFrame1.unitToken, PartyFrame.MemberFrame2.unitToken = "party1", "party2"
+PartyFrame:UpdatePartyFrames()
+-- a member frame Blizzard makes during combat gets its box after the fight
+local oldFour = PartyFrame.MemberFrame4
+state.combat = true
+local fresh = newMemberFrame(4)
+ns.RefreshAll()
+check(boxOn(fresh) == nil, "no new checkboxes made during combat")
+state.combat = false
+FireEvent("PLAYER_REGEN_ENABLED"); RunTimers()
+check(boxOn(fresh) ~= nil, "made once combat ends")
+PartyFrame.MemberFrame4 = oldFour
+
 r[2]:Click()
 check(ns.db.arrows.targets["Bob"] == true, "ticking Bob saves him")
 update()
@@ -642,7 +709,7 @@ check(opts:IsShown(), "settings page button opens the window")
 local function loadWith(saved)
     FindMyPartyDB = saved
     local ns2 = {}
-    for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua" }) do
+    for _, file in ipairs({ "Core.lua", "Nameplates.lua", "Arrows.lua", "Options.lua", "MinimapButton.lua", "PartyFrames.lua" }) do
         assert(loadfile(ADDON_DIR .. "/" .. file))("FindMyParty", ns2)
     end
     FireEvent("ADDON_LOADED", "FindMyParty")

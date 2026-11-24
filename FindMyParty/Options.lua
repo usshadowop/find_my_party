@@ -242,7 +242,7 @@ end
 ---------------------------------------------------------------------------
 local function CreateWindow()
     frame = CreateFrame("Frame", "FindMyPartyOptions", UIParent, BACKDROP_TEMPLATE)
-    frame:SetSize(660, 520)
+    frame:SetSize(660, 546)
     frame:SetPoint("CENTER")
     -- HIGH, like Blizzard's Settings window, so the color picker (DIALOG) opens on top.
     frame:SetFrameStrata("HIGH")
@@ -273,7 +273,7 @@ local function CreateWindow()
 
     local divider = frame:CreateTexture(nil, "ARTWORK")
     divider:SetColorTexture(1, 1, 1, 0.15)
-    divider:SetSize(1, 440)
+    divider:SetSize(1, 466)
     divider:SetPoint("TOP", frame, "TOPLEFT", 330, -50)
 
     local function Place(widget, x, y)
@@ -341,7 +341,7 @@ local function CreateWindow()
 
     -- Preview of what the name will look like
     local preview = Place(CreateFrame("Frame", nil, frame), LEFT, -398)
-    preview:SetSize(COLUMN_WIDTH, 104)
+    preview:SetSize(COLUMN_WIDTH, 120)
     if preview.SetClipsChildren then preview:SetClipsChildren(true) end
     local previewBg = preview:CreateTexture(nil, "BACKGROUND")
     previewBg:SetAllPoints()
@@ -420,6 +420,11 @@ local function CreateWindow()
         ns.RefreshAll()
     end), RIGHT, -462)
 
+    ui.partyBoxes = Place(CheckBox(frame, "Arrow checkboxes on the party frames", function(checked)
+        ns.db.arrows.partyBoxes = checked
+        ns.RefreshAll()
+    end), RIGHT, -488)
+
     -------------------------------------------------------------------
     frame:SetScript("OnShow", function() ns.RefreshAll() end)
     frame:RegisterEvent("CVAR_UPDATE")
@@ -458,6 +463,7 @@ function Options:Refresh()
     ui.arrowSlider:SetDisplayedValue(arrows.scale)
     ui.unlocked:SetChecked(arrows.unlocked)
     ui.minimap:SetChecked(not ns.db.minimap.hide)
+    ui.partyBoxes:SetChecked(arrows.partyBoxes)
     RefreshMembers()
 end
 

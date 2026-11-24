@@ -20,6 +20,7 @@ ns.defaults = {
         enabled = true,
         scale = 1,
         unlocked = false, -- true while the arrows can be dragged around
+        partyBoxes = true, -- arrow checkboxes on Blizzard's party frames
         x = 0,            -- arrow position, offset from the middle of the screen
         y = 150,
         targets = {},     -- [name] = true for each person to point at
@@ -159,6 +160,7 @@ function ns.RefreshAll()
     ns.Arrows:Rebuild()
     ns.Options:Refresh()
     ns.MinimapButton:Refresh()
+    ns.PartyBoxes:Refresh()
 end
 
 -- Unlocked arrows can be dragged around the screen; locked ones let clicks through.
@@ -206,6 +208,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         ns.Arrows:Init()
         ns.Options:Init()
         ns.MinimapButton:Init()
+        ns.PartyBoxes:Init()
 
         self:RegisterEvent("PLAYER_LOGIN")
         self:RegisterEvent("PLAYER_ENTERING_WORLD")

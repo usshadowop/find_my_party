@@ -5,6 +5,7 @@ A **WoW: Forever** addon for party members who lose track of the group in crowds
 - **Colored names over party members' heads.** Teal to start with, or any color and size you like, so your party's names stand out instead of blending in. The addon draws the name right over the game's own (the health bar stays), with a small arrow above it pointing down at them. That arrow has its own size setting.
 - **Hide everyone else's name plates (optional).** Off at first. Turn it on and in a busy city only your party's names show.
 - **Arrows that point to people.** Tick a party member's name and an on-screen arrow points their way, with how many yards off they are. Tick several people to get several arrows. Move them by unlocking them, or in the game's Edit Mode.
+- **Checkboxes on the party frames.** Each party member's frame (portrait, health and mana) gets a little checkbox. Tick it to point an arrow at them, and untick it to stop.
 - **A minimap button** (yellow party silhouettes) that opens the settings.
 
 Everything is set from one window: click the minimap button or type `/fmp`.
@@ -34,6 +35,7 @@ Click the **minimap button** (yellow party silhouettes) or type **`/fmp`**. It's
 
 **Right side: arrows**
 - Everyone in your group is listed. Tick the people you want an arrow for. The addon remembers who you ticked, so the arrow comes back when that person joins your group again.
+- **From the party frames:** a checkbox sits just right of each party member's frame, with a small arrow beside it. Tick it to point an arrow at them, and untick it to stop. It stays in step with the list in the settings. Untick **Arrow checkboxes on the party frames** to hide them. They show on the standard party frames (with portraits), not on raid-style party frames.
 - **Moving the arrows:** tick **Unlock the arrows so I can drag them** (or right-click the minimap button), drag them where you like, then untick it to lock them. While locked, your clicks go straight through them. They can also be moved in the game's **Edit Mode** (Esc → Edit Mode): they get a blue box there like the game's own frames, and lock again when you leave.
 - `/fmp unlock` and `/fmp lock` do the same, and `/fmp reset` puts the arrows back in the middle of the screen.
 
